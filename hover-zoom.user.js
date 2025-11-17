@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hover Zoom Follow
 // @namespace    https://paytonison.local/userscripts
-// @version      1.0.0
+// @version      2.0.0
 // @description  Expand hovered images to their largest viewable size while following the cursor, similar to Hover Zoom+.
 // @author       paytonison
 // @match        *://*/*
@@ -20,17 +20,22 @@
   const DATA_ATTRS = [
     'data-hover-zoom-src',
     'data-hover-zoom',
-    'data-src',
-    'data-lazy-src',
+    'data-full-src',
+    'data-fullsrc',
     'data-large-src',
     'data-original',
+    'data-original-src',
     'data-zoom-src',
-    'data-fullsrc',
-    'data-full-src',
+    'data-zoom-image',
+    'data-image-full',
+    'data-src',
+    'data-lazy-src',
     'data-image',
     'data-image-src',
     'data-img',
-    'data-url'
+    'data-url',
+    'data-high-res-src',
+    'data-hires'
   ];
 
   const CANDIDATE_SELECTOR = 'img,[data-hover-zoom-src],[data-hover-zoom],[data-zoom-src],[data-fullsrc],[data-full-src],[data-original],[data-large-src],[data-src],a,[role="img"]';
@@ -134,63 +139,179 @@
       return match ? match[2] : null;
     }
 
+    function tryUpgradeUrl(url) {
+      if (!url) return url;
+
+      // Common patterns for thumbnails that can be upgraded to full-size
+      const patterns = [
+        { find: /_thumb(\.[^.]+)$/i, replace: '_large$1' },
+        { find: /_small(\.[^.]+)$/i, replace: '_large$1' },
+        { find: /_medium(\.[^.]+)$/i, replace: '_large$1' },
+        { find: /\/thumb\//i, replace: '/large/' },
+        { find: /\/small\//i, replace: '/large/' },
+        { find: /\/medium\//i, replace: '/large/' },
+        { find: /\/thumbnails\//i, replace: '/images/' },
+        { find: /\/thumbs\//i, replace: '/images/' },
+        { find: /-thumb(\.[^.]+)$/i, replace: '-large$1' },
+        { find: /-small(\.[^.]+)$/i, replace: '-large$1' },
+        { find: /-medium(\.[^.]+)$/i, replace: '-large$1' },
+        { find: /_t(\.[^.]+)$/i, replace: '_o$1' }, // Flickr pattern
+        { find: /_m(\.[^.]+)$/i, replace: '_o$1' }, // Flickr pattern
+        { find: /=s\d+-c/i, replace: '=s0' }, // Google Photos pattern
+        { find: /\/w\d+\//i, replace: '/w2000/' }, // Width-based paths
+        { find: /\/h\d+\//i, replace: '/h2000/' }  // Height-based paths
+      ];
+
+      for (const pattern of patterns) {
+        if (pattern.find.test(url)) {
+          return url.replace(pattern.find, pattern.replace);
+        }
+      }
+
+      return url;
+    }
+
     function extractFromSrcSet(img) {
       if (!img.srcset) return null;
       let bestUrl = null;
       let bestScore = 0;
       const entries = img.srcset.split(',').map(item => item.trim()).filter(Boolean);
+
       for (const entry of entries) {
         const parts = entry.split(/\s+/);
         const candidateUrl = parts[0];
+        if (!candidateUrl) continue;
+
         const descriptor = parts[1] || '';
         let score = 1;
+
+        // Width descriptors (e.g., "1200w") - prefer these as they indicate actual image size
         if (descriptor.endsWith('w')) {
           score = parseFloat(descriptor);
-        } else if (descriptor.endsWith('x')) {
-          score = parseFloat(descriptor) * 1000;
+          if (!Number.isFinite(score) || score <= 0) score = 1;
         }
-        if (!Number.isFinite(score)) score = 1;
-        if (score >= bestScore) {
+        // Density descriptors (e.g., "2x") - multiply by 1000 to compare with width descriptors
+        else if (descriptor.endsWith('x')) {
+          score = parseFloat(descriptor) * 1000;
+          if (!Number.isFinite(score) || score <= 0) score = 1000;
+        }
+        // No descriptor - lowest priority
+        else {
+          score = 1;
+        }
+
+        // Always prefer higher scores (larger images)
+        if (score > bestScore) {
           bestScore = score;
           bestUrl = candidateUrl;
         }
       }
+
       return bestUrl;
+    }
+
+    function isElementWorthZooming(element) {
+      if (!element || element.nodeType !== 1) return false;
+
+      // Get the element's bounding box
+      const rect = element.getBoundingClientRect();
+      const displayWidth = rect.width;
+      const displayHeight = rect.height;
+
+      // Ignore very small elements (likely icons, buttons, etc.)
+      const MIN_SIZE = 32;
+      if (displayWidth < MIN_SIZE || displayHeight < MIN_SIZE) {
+        return false;
+      }
+
+      // For IMG elements, check if they're already displaying at full resolution
+      if (element.tagName === 'IMG' && element.naturalWidth && element.naturalHeight) {
+        const natWidth = element.naturalWidth;
+        const natHeight = element.naturalHeight;
+
+        // If the displayed size is within 10% of natural size, it's already full-res
+        const widthRatio = displayWidth / natWidth;
+        const heightRatio = displayHeight / natHeight;
+
+        if (widthRatio >= 0.9 && heightRatio >= 0.9) {
+          return false;
+        }
+      }
+
+      return true;
     }
 
     function extractImageUrl(element) {
       if (!element || element.nodeType !== 1) return null;
 
+      // First check data attributes (highest priority for full-res URLs)
       for (const attr of DATA_ATTRS) {
         const value = element.getAttribute(attr);
         const candidate = firstUrlFrom(value);
-        if (candidate) return candidate;
+        if (candidate) return tryUpgradeUrl(candidate);
       }
 
       if (element.tagName === 'IMG') {
-        // Check if the IMG is wrapped in an A tag that points to a full-resolution image
+        // For thumbnails: check if IMG is wrapped in an A tag pointing to full-resolution image
         const parentLink = element.closest('a[href]');
         if (parentLink && parentLink.href && EXTENSION_REGEX.test(parentLink.href)) {
-          return parentLink.href;
+          return tryUpgradeUrl(parentLink.href);
         }
 
+        // Check if IMG is inside a PICTURE element with source elements
+        const parentPicture = element.closest('picture');
+        if (parentPicture) {
+          const sources = parentPicture.querySelectorAll('source[srcset]');
+          let bestPictureUrl = null;
+          let bestPictureScore = 0;
+
+          for (const source of sources) {
+            const fromSourceSrcSet = extractFromSrcSet(source);
+            if (fromSourceSrcSet) {
+              // Parse the srcset to get the score
+              const entries = source.srcset.split(',').map(item => item.trim()).filter(Boolean);
+              for (const entry of entries) {
+                const parts = entry.split(/\s+/);
+                const descriptor = parts[1] || '';
+                let score = 1;
+                if (descriptor.endsWith('w')) {
+                  score = parseFloat(descriptor);
+                } else if (descriptor.endsWith('x')) {
+                  score = parseFloat(descriptor) * 1000;
+                }
+                if (score > bestPictureScore) {
+                  bestPictureScore = score;
+                  bestPictureUrl = fromSourceSrcSet;
+                }
+              }
+            }
+          }
+
+          if (bestPictureUrl) return tryUpgradeUrl(bestPictureUrl);
+        }
+
+        // Check srcset for highest resolution version
         const fromSrcSet = extractFromSrcSet(element);
-        if (fromSrcSet) return fromSrcSet;
-        if (element.currentSrc) return element.currentSrc;
-        if (element.src) return element.src;
+        if (fromSrcSet) return tryUpgradeUrl(fromSrcSet);
+        if (element.currentSrc) return tryUpgradeUrl(element.currentSrc);
+        if (element.src) return tryUpgradeUrl(element.src);
         // Skip background image check for IMG elements
       } else {
         // Only check background image for non-IMG elements (avoid expensive getComputedStyle)
-        const bg = parseBackgroundImage(window.getComputedStyle(element).backgroundImage);
-        if (bg) return bg;
+        // First check if element likely has a background image to avoid unnecessary getComputedStyle calls
+        const style = element.getAttribute('style');
+        if (style && style.includes('background')) {
+          const bg = parseBackgroundImage(window.getComputedStyle(element).backgroundImage);
+          if (bg) return tryUpgradeUrl(bg);
+        }
       }
 
       if (element.tagName === 'A' && element.href && EXTENSION_REGEX.test(element.href)) {
-        return element.href;
+        return tryUpgradeUrl(element.href);
       }
 
       if (element.dataset && element.dataset.backgroundImage) {
-        return element.dataset.backgroundImage;
+        return tryUpgradeUrl(element.dataset.backgroundImage);
       }
 
       return null;
@@ -298,6 +419,24 @@
           return;
         }
 
+        // Check if the loaded image is actually larger than the source element
+        if (target && target.getBoundingClientRect) {
+          const rect = target.getBoundingClientRect();
+          const displayWidth = rect.width;
+          const displayHeight = rect.height;
+
+          // Only show if the natural size is at least 20% larger in either dimension
+          const MIN_ZOOM_GAIN = 1.2;
+          const widthGain = naturalWidth / displayWidth;
+          const heightGain = naturalHeight / displayHeight;
+
+          if (widthGain < MIN_ZOOM_GAIN && heightGain < MIN_ZOOM_GAIN) {
+            lastRejectedTarget = target;
+            hideOverlay();
+            return;
+          }
+        }
+
         image.src = url;
         overlay.style.display = 'block';
         overlay.style.opacity = '1';
@@ -351,6 +490,15 @@
       }
 
       if (candidate === lastRejectedTarget) {
+        return;
+      }
+
+      // Check if element is worth zooming (not too small, not already full-size)
+      if (!isElementWorthZooming(candidate)) {
+        if (candidate !== activeTarget) {
+          lastRejectedTarget = candidate;
+          hideOverlay();
+        }
         return;
       }
 
