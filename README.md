@@ -1,6 +1,6 @@
-# Hover Zoom Follow
+# Hover Zoom Follow (Safari Edition)
 
-Hover Zoom Follow is a zero‑dependency userscript that recreates the behaviour of extensions like Hover Zoom+. Whenever your pointer glides over a media element, the script resolves the highest‑resolution source it can find, scales it to fit the viewport, and displays it in a floating preview that follows the cursor.
+Hover Zoom Follow is a zero‑dependency userscript for Safari that recreates the behaviour of extensions like Hover Zoom+. Whenever your pointer glides over a media element, the script resolves the highest‑resolution source it can find, scales it to fit the viewport, and displays it in a floating preview that follows the cursor.
 
 ## Features
 
@@ -16,11 +16,11 @@ Hover Zoom Follow is a zero‑dependency userscript that recreates the behaviour
 
 ## Installation
 
-1. Install a userscript manager such as Tampermonkey (Chrome, Edge), Violentmonkey (Firefox, Chrome, Edge), or Greasemonkey (Firefox).
-2. Create a **new script** and paste in the contents of [`hover-zoom.user.js`](hover-zoom.user.js), or import the file directly if your manager supports file URLs.
+1. Install a userscript manager for Safari such as **Userscripts** (available on the Mac App Store) or **Stay** for Safari.
+2. Create a **new script** and paste in the contents of [`Image-Hover-Zoom-Combined.user.js`](Image-Hover-Zoom-Combined.user.js), or import the file directly if your manager supports file URLs.
 3. Save the script. The metadata block already sets `@match *://*/*`, so it is enabled on every site by default.
 
-> Tip: In Tampermonkey/Violentmonkey you can drag the file into the dashboard to create/update the script, which makes keeping it in sync dead simple.
+> Note: This userscript is specifically designed and tested for Safari on macOS. It may not work correctly in other browsers.
 
 ## Usage
 
@@ -69,7 +69,7 @@ After editing, reload the script in your manager and refresh the target page.
 
 ## Development
 
-This repository is intentionally lightweight: edit [`hover-zoom.user.js`](hover-zoom.user.js), keep the metadata block intact, and bump the `@version` before distributing. No bundler, build step, or external dependencies are required.
+This repository is intentionally lightweight: edit [`Image-Hover-Zoom-Combined.user.js`](Image-Hover-Zoom-Combined.user.js), keep the metadata block intact, and bump the `@version` before distributing. No bundler, build step, or external dependencies are required.
 
 ## License
 
