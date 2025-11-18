@@ -4,12 +4,15 @@ Hover Zoom Follow is a zero‑dependency userscript that recreates the behaviour
 
 ## Features
 
-- Works everywhere: `@match *://*/*` means any site that exposes images, anchors, or role-based images is eligible.
-- Intelligent URL extraction: inspects `src`, `srcset`, parent anchors, background images, and common `data-*` attributes (including JSON blobs and delimited lists).
-- Polished presentation: draws an overlay with proper padding, drop shadow, rounded corners, and hides itself when the tab blurs, the pointer leaves, or nothing suitable is found.
-- Cursor-following preview: positions the preview relative to the pointer while respecting viewport bounds with a configurable margin.
-- Sensible performance: ignores true image documents, throttles pointer updates with `requestAnimationFrame`, and bails early when it has already rejected a target.
-- Privacy-friendly: no network requests beyond the image you are already hovering, no analytics, and no DOM mutations outside of the single overlay container.
+- **Works everywhere**: `@match *://*/*` means any site that exposes images, anchors, or role-based images is eligible.
+- **Intelligent URL extraction**: inspects `src`, `srcset`, parent anchors, `<picture>` elements, background images, and common `data-*` attributes (including JSON blobs and delimited lists).
+- **Smart URL upgrading**: automatically transforms thumbnail URLs to full-size versions by recognizing common patterns (`_thumb` → `_large`, `_small` → `_large`, `/thumb/` → `/large/`, plus platform-specific patterns for Flickr, Google Photos, and width/height-based paths).
+- **Minimum zoom threshold**: only shows the preview if the full-size image is at least 20% larger than the displayed version, avoiding unnecessary previews for images already at full resolution.
+- **Size filtering**: ignores tiny elements (smaller than 32×32px) to avoid showing previews for icons and buttons.
+- **Polished presentation**: draws an overlay with proper padding, drop shadow, rounded corners, and hides itself when the tab blurs, the pointer leaves, or nothing suitable is found.
+- **Cursor-following preview**: positions the preview relative to the pointer while respecting viewport bounds with a configurable 18px margin.
+- **Sensible performance**: ignores bare image documents, throttles pointer updates with `requestAnimationFrame`, caches rejected targets, and avoids expensive `getComputedStyle` calls unless necessary.
+- **Privacy-friendly**: no network requests beyond the image you are already hovering, no analytics, and no DOM mutations outside of the single overlay container.
 
 ## Installation
 
@@ -21,9 +24,9 @@ Hover Zoom Follow is a zero‑dependency userscript that recreates the behaviour
 
 ## Usage
 
-- Hover any image, linked thumbnail, or element with a background image. When a larger source exists, an overlay appears near the pointer.
+- Hover any image, linked thumbnail, or element with a background image. When a larger source exists (at least 20% bigger than the displayed size), an overlay appears near the pointer.
 - Move the pointer to reposition the overlay. It automatically flips sides so it never blocks the hovered content.
-- Move the pointer away, switch tabs, or hit `Esc` (if your manager maps it to disable scripts on the page) to dismiss the preview.
+- Move the pointer away, switch tabs, or blur the window to dismiss the preview.
 
 The script only reacts to mouse/pen pointer events and ignores touch entirely so it stays out of the way on mobile-style interactions.
 
@@ -31,13 +34,17 @@ The script only reacts to mouse/pen pointer events and ignores touch entirely so
 
 1. The script waits until `document-idle`, then aborts early if the page _is_ an image (so it does not interfere with raw image tabs).
 2. It injects a single overlay `<div>` with an `<img>` child and keeps references to the active target/image sizes.
-3. Every pointer move finds the closest candidate via `CANDIDATE_SELECTOR`. URLs are derived by:
-   - checking a curated list of `data-*` attributes (including parsing JSON/array strings and multi-value `|`/`,` entries),
-   - using `srcset` descriptors to prefer the highest resolution,
+3. Every pointer move finds the closest candidate via `CANDIDATE_SELECTOR` (ignoring elements smaller than 32×32px). URLs are derived by:
+   - checking a curated list of 18 `data-*` attributes (including parsing JSON/array strings and multi-value `|`/`,` entries),
+   - for `<img>` elements inside `<a>` tags, checking if the parent link points to a full-resolution image,
+   - for `<img>` elements inside `<picture>` elements, checking all `<source>` elements for the highest-resolution `srcset`,
+   - using `srcset` descriptors to prefer the highest resolution (prioritizing width descriptors over density descriptors),
    - falling back to `currentSrc`, `src`, or a containing anchor with an image extension,
-   - checking computed background images on non-`<img>` elements.
-4. Once a viable URL is discovered, it preloads the image, measures its natural size, then scales it to 95 % of the viewport while maintaining aspect ratio and a margin of `18px`.
-5. Subsequent pointer moves only update the overlay position via `requestAnimationFrame` to minimize layout thrash.
+   - checking computed background images on non-`<img>` elements (only if the inline `style` attribute contains "background" to avoid expensive `getComputedStyle` calls).
+4. Once a viable URL is found, it's upgraded using pattern matching (e.g., `_thumb` → `_large`, `/thumbnails/` → `/images/`, plus platform-specific patterns for Flickr `_t`/`_m` → `_o`, Google Photos `=s\d+-c` → `=s0`, and width/height-based paths).
+5. The image is preloaded and its natural size is measured. If the natural size is not at least 20% larger than the displayed size in either dimension, the preview is skipped.
+6. If the image passes all checks, it's scaled to fit 95% of the viewport while maintaining aspect ratio and respecting an 18px margin.
+7. Subsequent pointer moves only update the overlay position via `requestAnimationFrame` to minimize layout thrash. Previously rejected targets are cached to avoid redundant processing.
 
 ## Tweaking
 
@@ -45,7 +52,10 @@ Because this is plain JavaScript you can adapt it to your needs:
 
 - **Supported attributes**: edit `DATA_ATTRS` if the sites you use rely on custom attribute names for HD URLs.
 - **Eligible elements**: extend `CANDIDATE_SELECTOR` to capture bespoke components (e.g., `.lazy-thumb`).
-- **Overlay spacing & style**: adjust the `margin` constant or the `overlay.style` block to change padding, colors, or z-index.
+- **URL upgrade patterns**: add custom patterns to `tryUpgradeUrl` if you want to transform site-specific thumbnail URLs to full-size versions.
+- **Minimum zoom threshold**: adjust `MIN_ZOOM_GAIN` (default 1.2) to control how much larger an image must be to trigger the preview.
+- **Size filtering**: change `MIN_SIZE` (default 32) to adjust the minimum element size that triggers previews.
+- **Overlay spacing & style**: adjust the `margin` constant (default 18) or the `overlay.style` block to change padding, colors, or z-index.
 - **Pointer behaviour**: switch `POINTER_EVENT` or drop the pointer-type guard to allow touch/pen previews.
 
 After editing, reload the script in your manager and refresh the target page.
