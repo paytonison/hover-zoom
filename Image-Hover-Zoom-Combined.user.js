@@ -89,6 +89,28 @@
   let lastPosY = -1;
   let pendingLoader = null;
   const margin = 18;
+  const urlCache = new WeakMap();
+  const rejectionCache = new WeakMap();
+  const REJECTION_COOLDOWN = 1500;
+  const getTime = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
+
+  function cacheUrl(element, url) {
+    if (!element || !url) return null;
+    urlCache.set(element, url);
+    rejectionCache.delete(element);
+    return url;
+  }
+
+  function markRejected(element) {
+    if (!element) return;
+    rejectionCache.set(element, getTime() + REJECTION_COOLDOWN);
+  }
+
+  function isTemporarilyRejected(element) {
+    if (!element) return false;
+    const expiresAt = rejectionCache.get(element);
+    return typeof expiresAt === 'number' && expiresAt > getTime();
+  }
 
   // --- Helper: Extract first URL from various formats (including JSON) ---
   function firstUrlFrom(raw) {
@@ -208,11 +230,14 @@
   function extractImageUrl(element) {
     if (!element || element.nodeType !== 1) return null;
 
+    const cached = urlCache.get(element);
+    if (cached) return cached;
+
     // 1. Check data attributes (highest priority)
     for (const attr of DATA_ATTRS) {
       const value = element.getAttribute(attr);
       const candidate = firstUrlFrom(value);
-      if (candidate) return upgradeUrl(candidate);
+      if (candidate) return cacheUrl(element, upgradeUrl(candidate));
     }
 
     // 2. For IMG elements
@@ -220,7 +245,7 @@
       // Check parent link
       const parentLink = element.closest('a[href]');
       if (parentLink && parentLink.href && EXTENSION_REGEX.test(parentLink.href)) {
-        return upgradeUrl(parentLink.href);
+        return cacheUrl(element, upgradeUrl(parentLink.href));
       }
 
       // Check picture element
@@ -229,34 +254,36 @@
         const sources = parentPicture.querySelectorAll('source[srcset]');
         for (const source of sources) {
           const fromSourceSrcSet = extractFromSrcSet(source);
-          if (fromSourceSrcSet) return upgradeUrl(fromSourceSrcSet);
+          if (fromSourceSrcSet) return cacheUrl(element, upgradeUrl(fromSourceSrcSet));
         }
       }
 
       // Check srcset
       const fromSrcSet = extractFromSrcSet(element);
-      if (fromSrcSet) return upgradeUrl(fromSrcSet);
+      if (fromSrcSet) return cacheUrl(element, upgradeUrl(fromSrcSet));
 
       // Fallback to src
-      if (element.currentSrc) return upgradeUrl(element.currentSrc);
-      if (element.src) return upgradeUrl(element.src);
+      if (element.currentSrc) return cacheUrl(element, upgradeUrl(element.currentSrc));
+      if (element.src) return cacheUrl(element, upgradeUrl(element.src));
     } else {
       // 3. For non-IMG elements, check background image
       const style = element.getAttribute('style');
       if (style && style.includes('background')) {
-        const bg = parseBackgroundImage(window.getComputedStyle(element).backgroundImage);
-        if (bg) return upgradeUrl(bg);
+        const inlineBg = parseBackgroundImage(style);
+        if (inlineBg) return cacheUrl(element, upgradeUrl(inlineBg));
+        const computedBg = parseBackgroundImage(window.getComputedStyle(element).backgroundImage);
+        if (computedBg) return cacheUrl(element, upgradeUrl(computedBg));
       }
     }
 
     // 4. Check if element is a link to an image
     if (element.tagName === 'A' && element.href && EXTENSION_REGEX.test(element.href)) {
-      return upgradeUrl(element.href);
+      return cacheUrl(element, upgradeUrl(element.href));
     }
 
     // 5. Check background image data attribute
     if (element.dataset && element.dataset.backgroundImage) {
-      return upgradeUrl(element.dataset.backgroundImage);
+      return cacheUrl(element, upgradeUrl(element.dataset.backgroundImage));
     }
 
     return null;
@@ -340,6 +367,7 @@
 
       if (!naturalWidth || !naturalHeight) {
         hidePreview();
+        markRejected(target);
         return;
       }
 
@@ -351,6 +379,7 @@
 
         if (widthGain < MIN_ZOOM_GAIN && heightGain < MIN_ZOOM_GAIN) {
           hidePreview();
+          markRejected(target);
           return;
         }
       }
@@ -366,6 +395,7 @@
       if (pendingLoader === loader) {
         pendingLoader = null;
         hidePreview();
+        markRejected(target);
       }
     };
   }
@@ -414,15 +444,30 @@
     }
   }, { passive: true });
 
+  // --- Event: Bust caches when images reload ---
+  document.addEventListener('load', (e) => {
+    if (e.target instanceof HTMLImageElement) {
+      urlCache.delete(e.target);
+      rejectionCache.delete(e.target);
+    }
+  }, true);
+
   // --- Event: Mouse over images ---
   document.addEventListener('mouseover', (e) => {
     const img = e.target;
     if (!(img instanceof HTMLImageElement)) return;
+    if (isTemporarilyRejected(img)) return;
 
-    if (!isElementWorthZooming(img)) return;
+    if (!isElementWorthZooming(img)) {
+      markRejected(img);
+      return;
+    }
 
     const url = extractImageUrl(img);
-    if (!url) return;
+    if (!url) {
+      markRejected(img);
+      return;
+    }
 
     // Don't reload same image
     if (url === activeUrl && img === activeTarget) return;
