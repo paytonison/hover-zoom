@@ -93,6 +93,7 @@
   const rejectionCache = new WeakMap();
   const REJECTION_COOLDOWN = 1500;
   const getTime = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
+  const isOverlayVisible = () => overlay.style.display !== 'none';
 
   function cacheUrl(element, url) {
     if (!element || !url) return null;
@@ -362,33 +363,47 @@
     loader.onload = () => {
       if (pendingLoader !== loader) return;
 
-      const naturalWidth = loader.naturalWidth || loader.width;
-      const naturalHeight = loader.naturalHeight || loader.height;
+      const finalize = () => {
+        const naturalWidth = loader.naturalWidth || loader.width;
+        const naturalHeight = loader.naturalHeight || loader.height;
 
-      if (!naturalWidth || !naturalHeight) {
-        hidePreview();
-        markRejected(target);
-        return;
-      }
+        // Target disappeared from the DOM while loading; bail out.
+        if (target && !document.documentElement.contains(target)) {
+          hidePreview();
+          return;
+        }
 
-      // Validate zoom gain: only show if significantly larger
-      if (target && target.getBoundingClientRect) {
-        const rect = target.getBoundingClientRect();
-        const widthGain = naturalWidth / rect.width;
-        const heightGain = naturalHeight / rect.height;
-
-        if (widthGain < MIN_ZOOM_GAIN && heightGain < MIN_ZOOM_GAIN) {
+        if (!naturalWidth || !naturalHeight) {
           hidePreview();
           markRejected(target);
           return;
         }
-      }
 
-      previewImg.src = url;
-      overlay.style.display = 'block';
-      overlay.style.opacity = '1';
-      pendingLoader = null;
-      positionOverlay();
+        // Validate zoom gain: only show if significantly larger
+        if (target && target.getBoundingClientRect) {
+          const rect = target.getBoundingClientRect();
+          const widthGain = naturalWidth / rect.width;
+          const heightGain = naturalHeight / rect.height;
+
+          if (widthGain < MIN_ZOOM_GAIN && heightGain < MIN_ZOOM_GAIN) {
+            hidePreview();
+            markRejected(target);
+            return;
+          }
+        }
+
+        previewImg.src = url;
+        overlay.style.display = 'block';
+        overlay.style.opacity = '1';
+        pendingLoader = null;
+        positionOverlay();
+      };
+
+      if (typeof loader.decode === 'function') {
+        loader.decode().then(finalize).catch(finalize);
+      } else {
+        finalize();
+      }
     };
 
     loader.onerror = () => {
@@ -433,8 +448,18 @@
     pointerX = e.clientX;
     pointerY = e.clientY;
 
+    const visible = isOverlayVisible();
+
+    if (visible && activeTarget) {
+      const stillInDom = document.documentElement.contains(activeTarget);
+      const stillOverTarget = activeTarget === e.target || activeTarget.contains(e.target);
+      if (!stillInDom || !stillOverTarget) {
+        hidePreview();
+      }
+    }
+
     // Throttle positioning with RAF
-    if (overlay.style.display !== 'none') {
+    if (isOverlayVisible()) {
       if (!rafId) {
         rafId = requestAnimationFrame(() => {
           rafId = null;
@@ -446,9 +471,21 @@
 
   // --- Event: Bust caches when images reload ---
   document.addEventListener('load', (e) => {
-    if (e.target instanceof HTMLImageElement) {
-      urlCache.delete(e.target);
-      rejectionCache.delete(e.target);
+    const img = e.target;
+
+    if (img instanceof HTMLImageElement) {
+      urlCache.delete(img);
+      rejectionCache.delete(img);
+
+      // When the underlying image finishes loading, refresh the preview in case we showed a placeholder URL.
+      if (activeTarget === img) {
+        const refreshedUrl = extractImageUrl(img);
+        if (refreshedUrl) {
+          showPreview(img, refreshedUrl);
+        } else {
+          hidePreview();
+        }
+      }
     }
   }, true);
 
@@ -481,6 +518,13 @@
       hidePreview();
     }
   }, { passive: true });
+
+  // --- Event: Hide when pointer leaves the viewport entirely ---
+  window.addEventListener('mouseout', (e) => {
+    if (!e.relatedTarget) {
+      hidePreview();
+    }
+  });
 
   // --- Event: Hide on scroll, blur, escape ---
   window.addEventListener('scroll', hidePreview, true);
