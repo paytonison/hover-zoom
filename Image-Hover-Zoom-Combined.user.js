@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Hover Zoom Combined - Enhanced Edition
 // @namespace    https://paytonison.dev
-// @version      5.0.0
+// @version      5.1.0
 // @description  Best-in-class image/video hover preview with site-specific extraction rules, React component introspection, and support for 20+ major sites. Enhanced with features from MPIV.
 // @author       Payton Ison
 // @match        *://*/*
@@ -10,8 +10,10 @@
 // ==/UserScript==
 
 /*
- * Enhanced Features (v5.0.0):
- * - React component introspection for Instagram, Facebook, DeviantArt
+ * Enhanced Features (v5.1.0):
+ * - Deep React Fiber introspection for Instagram (videos & carousel support)
+ * - Enhanced Instagram CDN URL upgrading
+ * - React component introspection for Facebook, DeviantArt
  * - Site-specific extraction for 20+ major sites
  * - Multi-URL fallback support (e.g., Imgur gif->webm->mp4)
  * - Enhanced thumbnail detection patterns
@@ -262,6 +264,16 @@
     if (VIDEO_EXTENSION_REGEX.test(url)) return url;
 
     // Site-specific patterns
+    // Instagram
+    if (url.includes('cdninstagram.com') || url.includes('instagram.com')) {
+      // Remove size constraints
+      url = url.replace(/\/s\d+x\d+\//, '/');
+      // Remove video preview path
+      url = url.replace(/\/vp\/[^/]+\//, '/');
+      // Remove size query parameters
+      url = url.replace(/([?&])(w|width|h|height|size)=\d+/gi, '');
+    }
+
     // Twitter/X
     if (url.includes('twimg.com')) {
       url = url.replace(/name=\w+/, 'name=orig').replace(/:(\w+)$/, ':orig');
@@ -313,27 +325,92 @@
 
     // Instagram
     if (hostname.includes('instagram.com') || hostname.includes('instagr.am')) {
-      // Try to get data from React components
-      const reactData = getReactProps(element.closest('article') || element);
-      if (reactData) {
-        // Check for video URL
-        const videoUrl = pick(reactData, 'node.video_url') ||
-                        pick(reactData, 'video_url') ||
-                        pick(reactData, 'videoUrl');
-        if (videoUrl) return videoUrl;
+      // Helper to deep search React fiber for media URLs
+      function deepSearchReactFiber(fiber, depth = 0, maxDepth = 10) {
+        if (!fiber || depth > maxDepth) return null;
 
-        // Check for high-res image
-        const displayUrl = pick(reactData, 'node.display_url') ||
-                          pick(reactData, 'displayUrl') ||
-                          pick(reactData, 'display_url');
-        if (displayUrl) return displayUrl;
+        // Check memoizedProps
+        if (fiber.memoizedProps) {
+          const props = fiber.memoizedProps;
+
+          // Video URLs
+          const videoUrl = props.videoUrl || props.video_url ||
+                          pick(props, 'node.video_url') ||
+                          pick(props, 'media.video_url') ||
+                          pick(props, 'video.video_url');
+          if (videoUrl && typeof videoUrl === 'string') return videoUrl;
+
+          // Display URLs (high-res images)
+          const displayUrl = props.displayUrl || props.display_url ||
+                            pick(props, 'node.display_url') ||
+                            pick(props, 'media.display_url') ||
+                            pick(props, 'node.display_resources.0.src') ||
+                            pick(props, 'displayResources.0.src');
+          if (displayUrl && typeof displayUrl === 'string') return displayUrl;
+
+          // Carousel media
+          const carouselMedia = pick(props, 'node.carousel_media') ||
+                               pick(props, 'carouselMedia');
+          if (Array.isArray(carouselMedia) && carouselMedia.length > 0) {
+            const firstItem = carouselMedia[0];
+            if (firstItem.video_url) return firstItem.video_url;
+            if (firstItem.display_url) return firstItem.display_url;
+          }
+        }
+
+        // Traverse up and down the fiber tree
+        const searchTargets = [fiber.return, fiber.child, fiber.sibling].filter(Boolean);
+        for (const target of searchTargets) {
+          const result = deepSearchReactFiber(target, depth + 1, maxDepth);
+          if (result) return result;
+        }
+
+        return null;
+      }
+
+      // Try to get data from React components
+      const article = element.closest('article');
+      const searchRoot = article || element.closest('div[role="button"]') || element;
+
+      // Search for React fiber
+      if (isFF) {
+        const wrapped = searchRoot.wrappedJSObject || searchRoot;
+        for (const k of Object.keys(wrapped)) {
+          if (k.startsWith('__reactFiber') || k.startsWith('__reactProps')) {
+            const result = deepSearchReactFiber(wrapped[k]);
+            if (result) return result;
+          }
+        }
+      } else {
+        for (const k of Object.keys(searchRoot)) {
+          if (k.startsWith('__reactFiber') || k.startsWith('__reactProps')) {
+            const result = deepSearchReactFiber(searchRoot[k]);
+            if (result) return result;
+          }
+        }
+      }
+
+      // Check for Instagram-specific data attributes
+      const dataAttrs = ['data-media-url', 'data-full-url', 'data-image-url'];
+      for (const attr of dataAttrs) {
+        const value = element.getAttribute(attr) || searchRoot?.getAttribute(attr);
+        if (value) return value;
       }
 
       // Fallback: Look for largest image in srcset
       const img = element.tagName === 'IMG' ? element : element.querySelector('img');
-      if (img && img.srcset) {
-        const fromSrcSet = extractFromSrcSet(img);
-        if (fromSrcSet) return fromSrcSet;
+      if (img) {
+        // Try srcset first
+        if (img.srcset) {
+          const fromSrcSet = extractFromSrcSet(img);
+          if (fromSrcSet) return fromSrcSet;
+        }
+
+        // Check for Instagram CDN URLs and upgrade them
+        if (img.src && img.src.includes('cdninstagram.com')) {
+          // Remove size constraints from Instagram URLs
+          return img.src.replace(/\/s\d+x\d+\//, '/').replace(/\/vp\/[^/]+\//, '/');
+        }
       }
     }
 
