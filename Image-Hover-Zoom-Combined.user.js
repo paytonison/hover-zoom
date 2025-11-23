@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Image Hover Zoom Combined - Safari Edition
 // @namespace    https://paytonison.dev
-// @version      4.0.0
-// @description  Best-in-class image hover preview with full resolution detection. Combines advanced URL extraction, smart filtering, and smooth performance. Safari-compatible.
+// @version      4.1.0
+// @description  Best-in-class image/video hover preview with full resolution detection. Combines advanced URL extraction, smart filtering, and smooth performance. Safari-compatible.
 // @author       Payton Ison
 // @match        *://*/*
 // @grant        none
@@ -40,10 +40,12 @@
     'data-hires'
   ];
 
-  const EXTENSION_REGEX = /\.(?:jpe?g|png|gif|webp|avif|bmp|svg|heic)(?:[\?#].*)?$/i;
+  const VIDEO_EXTENSION_REGEX = /\.(?:mp4|webm|ogg|ogv|mov|m4v)(?:[\?#].*)?$/i;
+  const MEDIA_EXTENSION_REGEX = /\.(?:jpe?g|png|gif|webp|avif|bmp|svg|heic|mp4|webm|ogg|ogv|mov|m4v)(?:[\?#].*)?$/i;
   const POINTER_EVENT = window.PointerEvent ? 'pointermove' : 'mousemove';
   const MIN_SIZE = 40; // Ignore icons/tiny images
   const MIN_ZOOM_GAIN = 1.2; // Only show if at least 20% larger
+  const MAX_PARENT_SEARCH = 5; // How far up the tree we'll look for a media URL
 
   // --- Create overlay ---
   const overlay = document.createElement('div');
@@ -76,7 +78,23 @@
     borderRadius: '6px'
   });
 
+  const previewVideo = document.createElement('video');
+  previewVideo.muted = true;
+  previewVideo.loop = true;
+  previewVideo.playsInline = true;
+  previewVideo.preload = 'metadata';
+  previewVideo.style.display = 'none';
+  Object.assign(previewVideo.style, {
+    maxWidth: '90vw',
+    maxHeight: '90vh',
+    width: 'auto',
+    height: 'auto',
+    objectFit: 'contain',
+    borderRadius: '6px'
+  });
+
   overlay.appendChild(previewImg);
+  overlay.appendChild(previewVideo);
   document.body.appendChild(overlay);
 
   // --- State ---
@@ -182,6 +200,7 @@
   // --- Helper: Upgrade thumbnail URLs to full resolution ---
   function upgradeUrl(url) {
     if (!url) return url;
+    if (VIDEO_EXTENSION_REGEX.test(url)) return url;
 
     // Site-specific patterns
     // Twitter/X
@@ -234,6 +253,8 @@
     const cached = urlCache.get(element);
     if (cached) return cached;
 
+    const tagName = element.tagName;
+
     // 1. Check data attributes (highest priority)
     for (const attr of DATA_ATTRS) {
       const value = element.getAttribute(attr);
@@ -241,11 +262,17 @@
       if (candidate) return cacheUrl(element, upgradeUrl(candidate));
     }
 
-    // 2. For IMG elements
-    if (element.tagName === 'IMG') {
+    // 2. Background image data attribute
+    if (element.dataset && element.dataset.backgroundImage) {
+      const candidate = firstUrlFrom(element.dataset.backgroundImage);
+      if (candidate) return cacheUrl(element, upgradeUrl(candidate));
+    }
+
+    // 3. For IMG elements
+    if (tagName === 'IMG') {
       // Check parent link
       const parentLink = element.closest('a[href]');
-      if (parentLink && parentLink.href && EXTENSION_REGEX.test(parentLink.href)) {
+      if (parentLink && parentLink.href && MEDIA_EXTENSION_REGEX.test(parentLink.href)) {
         return cacheUrl(element, upgradeUrl(parentLink.href));
       }
 
@@ -266,25 +293,36 @@
       // Fallback to src
       if (element.currentSrc) return cacheUrl(element, upgradeUrl(element.currentSrc));
       if (element.src) return cacheUrl(element, upgradeUrl(element.src));
-    } else {
-      // 3. For non-IMG elements, check background image
+    }
+
+    // 4. For VIDEO elements
+    if (tagName === 'VIDEO') {
+      if (element.poster) {
+        const poster = firstUrlFrom(element.poster);
+        if (poster) return cacheUrl(element, upgradeUrl(poster));
+      }
+      if (element.currentSrc) return cacheUrl(element, upgradeUrl(element.currentSrc));
+      if (element.src) return cacheUrl(element, upgradeUrl(element.src));
+    }
+
+    // 5. For non-IMG elements, check background image (inline first, then computed)
+    if (tagName !== 'IMG') {
       const style = element.getAttribute('style');
       if (style && style.includes('background')) {
         const inlineBg = parseBackgroundImage(style);
         if (inlineBg) return cacheUrl(element, upgradeUrl(inlineBg));
-        const computedBg = parseBackgroundImage(window.getComputedStyle(element).backgroundImage);
+      }
+
+      const computedStyle = window.getComputedStyle(element);
+      if (computedStyle) {
+        const computedBg = parseBackgroundImage(computedStyle.backgroundImage);
         if (computedBg) return cacheUrl(element, upgradeUrl(computedBg));
       }
     }
 
-    // 4. Check if element is a link to an image
-    if (element.tagName === 'A' && element.href && EXTENSION_REGEX.test(element.href)) {
+    // 6. Check if element is a link to a media file
+    if (tagName === 'A' && element.href && MEDIA_EXTENSION_REGEX.test(element.href)) {
       return cacheUrl(element, upgradeUrl(element.href));
-    }
-
-    // 5. Check background image data attribute
-    if (element.dataset && element.dataset.backgroundImage) {
-      return cacheUrl(element, upgradeUrl(element.dataset.backgroundImage));
     }
 
     return null;
@@ -293,6 +331,13 @@
   // --- Check if element is worth zooming ---
   function isElementWorthZooming(element) {
     if (!element || element.nodeType !== 1) return false;
+
+    const tagName = element.tagName;
+
+    // Text links pointing directly at media should be allowed regardless of size.
+    if (tagName === 'A') {
+      return true;
+    }
 
     const rect = element.getBoundingClientRect();
     const displayWidth = rect.width;
@@ -304,7 +349,7 @@
     }
 
     // For IMG elements, check if already at full resolution
-    if (element.tagName === 'IMG' && element.naturalWidth && element.naturalHeight) {
+    if (tagName === 'IMG' && element.naturalWidth && element.naturalHeight) {
       const widthRatio = displayWidth / element.naturalWidth;
       const heightRatio = displayHeight / element.naturalHeight;
 
@@ -315,6 +360,35 @@
     }
 
     return true;
+  }
+
+  // --- Walk up the DOM to find the nearest element with a usable media URL ---
+  function findHoverTarget(startElement) {
+    let el = startElement instanceof Element ? startElement : null;
+    let steps = 0;
+
+    while (el && steps <= MAX_PARENT_SEARCH) {
+      if (!(el instanceof HTMLElement)) break;
+
+      if (isTemporarilyRejected(el)) {
+        el = el.parentElement;
+        steps += 1;
+        continue;
+      }
+
+      const url = extractImageUrl(el);
+      if (url) {
+        if (isElementWorthZooming(el)) {
+          return { element: el, url };
+        }
+        markRejected(el);
+      }
+
+      el = el.parentElement;
+      steps += 1;
+    }
+
+    return null;
   }
 
   // --- Position overlay near cursor ---
@@ -352,67 +426,127 @@
     if (pendingLoader) {
       pendingLoader.onload = null;
       pendingLoader.onerror = null;
+      if (pendingLoader.onloadedmetadata) {
+        pendingLoader.onloadedmetadata = null;
+      }
+      if (typeof pendingLoader.pause === 'function') {
+        pendingLoader.pause();
+      }
+      pendingLoader = null;
     }
 
-    const loader = new Image();
-    loader.decoding = 'async';
-    loader.referrerPolicy = 'no-referrer';
-    loader.src = url;
-    pendingLoader = loader;
+    const finalize = (naturalWidth, naturalHeight, type) => {
+      // Target disappeared from the DOM while loading; bail out.
+      if (target && !document.documentElement.contains(target)) {
+        hidePreview();
+        return;
+      }
 
-    loader.onload = () => {
-      if (pendingLoader !== loader) return;
+      if (!naturalWidth || !naturalHeight) {
+        hidePreview();
+        markRejected(target);
+        return;
+      }
 
-      const finalize = () => {
-        const naturalWidth = loader.naturalWidth || loader.width;
-        const naturalHeight = loader.naturalHeight || loader.height;
+      // Validate zoom gain: only show if significantly larger
+      if (target && target.getBoundingClientRect) {
+        const rect = target.getBoundingClientRect();
+        const widthGain = naturalWidth / rect.width;
+        const heightGain = naturalHeight / rect.height;
 
-        // Target disappeared from the DOM while loading; bail out.
-        if (target && !document.documentElement.contains(target)) {
-          hidePreview();
-          return;
-        }
-
-        if (!naturalWidth || !naturalHeight) {
+        if (widthGain < MIN_ZOOM_GAIN && heightGain < MIN_ZOOM_GAIN) {
           hidePreview();
           markRejected(target);
           return;
         }
+      }
 
-        // Validate zoom gain: only show if significantly larger
-        if (target && target.getBoundingClientRect) {
-          const rect = target.getBoundingClientRect();
-          const widthGain = naturalWidth / rect.width;
-          const heightGain = naturalHeight / rect.height;
-
-          if (widthGain < MIN_ZOOM_GAIN && heightGain < MIN_ZOOM_GAIN) {
-            hidePreview();
-            markRejected(target);
-            return;
+      if (type === 'video') {
+        previewImg.style.display = 'none';
+        previewImg.src = '';
+        previewVideo.style.display = 'block';
+        if (previewVideo.src !== url) {
+          previewVideo.src = url;
+          try {
+            previewVideo.load();
+          } catch (_) {
+            // Ignore load errors; play() will surface failure if any.
           }
         }
 
+        const playPromise = previewVideo.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(() => {});
+        }
+      } else {
+        previewVideo.pause();
+        previewVideo.src = '';
+        previewVideo.style.display = 'none';
+        previewImg.style.display = 'block';
         previewImg.src = url;
-        overlay.style.display = 'block';
-        overlay.style.opacity = '1';
-        pendingLoader = null;
-        positionOverlay();
+      }
+
+      overlay.style.display = 'block';
+      overlay.style.opacity = '1';
+      pendingLoader = null;
+      positionOverlay();
+    };
+
+    if (VIDEO_EXTENSION_REGEX.test(url)) {
+      const loader = document.createElement('video');
+      loader.preload = 'metadata';
+      loader.muted = true;
+      loader.playsInline = true;
+      loader.src = url;
+      pendingLoader = loader;
+
+      loader.onloadedmetadata = () => {
+        if (pendingLoader !== loader) return;
+        const naturalWidth = loader.videoWidth || loader.clientWidth;
+        const naturalHeight = loader.videoHeight || loader.clientHeight;
+        finalize(naturalWidth, naturalHeight, 'video');
       };
 
-      if (typeof loader.decode === 'function') {
-        loader.decode().then(finalize).catch(finalize);
-      } else {
-        finalize();
-      }
-    };
+      loader.onerror = () => {
+        if (pendingLoader === loader) {
+          pendingLoader = null;
+          hidePreview();
+          markRejected(target);
+        }
+      };
 
-    loader.onerror = () => {
-      if (pendingLoader === loader) {
-        pendingLoader = null;
-        hidePreview();
-        markRejected(target);
+      try {
+        loader.load();
+      } catch (_) {
+        // Some browsers ignore load() when preloading metadata; let the events sort it out.
       }
-    };
+    } else {
+      const loader = new Image();
+      loader.decoding = 'async';
+      loader.referrerPolicy = 'no-referrer';
+      loader.src = url;
+      pendingLoader = loader;
+
+      const finishImage = () => finalize(loader.naturalWidth || loader.width, loader.naturalHeight || loader.height, 'image');
+
+      loader.onload = () => {
+        if (pendingLoader !== loader) return;
+
+        if (typeof loader.decode === 'function') {
+          loader.decode().then(finishImage).catch(finishImage);
+        } else {
+          finishImage();
+        }
+      };
+
+      loader.onerror = () => {
+        if (pendingLoader === loader) {
+          pendingLoader = null;
+          hidePreview();
+          markRejected(target);
+        }
+      };
+    }
   }
 
   // --- Hide preview ---
@@ -427,6 +561,12 @@
     if (pendingLoader) {
       pendingLoader.onload = null;
       pendingLoader.onerror = null;
+      if (pendingLoader.onloadedmetadata) {
+        pendingLoader.onloadedmetadata = null;
+      }
+      if (typeof pendingLoader.pause === 'function') {
+        pendingLoader.pause();
+      }
       pendingLoader = null;
     }
 
@@ -436,6 +576,9 @@
     }
 
     previewImg.src = '';
+    previewVideo.pause();
+    previewVideo.src = '';
+    previewVideo.style.display = 'none';
   }
 
   // --- Event: Pointer/mouse move ---
@@ -469,11 +612,11 @@
     }
   }, { passive: true });
 
-  // --- Event: Bust caches when images reload ---
+  // --- Event: Bust caches when media reload ---
   document.addEventListener('load', (e) => {
     const img = e.target;
 
-    if (img instanceof HTMLImageElement) {
+    if (img instanceof HTMLImageElement || img instanceof HTMLVideoElement) {
       urlCache.delete(img);
       rejectionCache.delete(img);
 
@@ -489,34 +632,30 @@
     }
   }, true);
 
-  // --- Event: Mouse over images ---
+  // --- Event: Mouse over potential media ---
   document.addEventListener('mouseover', (e) => {
-    const img = e.target;
-    if (!(img instanceof HTMLImageElement)) return;
-    if (isTemporarilyRejected(img)) return;
+    const info = findHoverTarget(e.target);
+    if (!info) return;
 
-    if (!isElementWorthZooming(img)) {
-      markRejected(img);
-      return;
-    }
+    const { element, url } = info;
 
-    const url = extractImageUrl(img);
-    if (!url) {
-      markRejected(img);
-      return;
-    }
+    // Don't reload same media
+    if (url === activeUrl && element === activeTarget) return;
 
-    // Don't reload same image
-    if (url === activeUrl && img === activeTarget) return;
-
-    showPreview(img, url);
+    showPreview(element, url);
   }, { passive: true });
 
   // --- Event: Mouse out ---
   document.addEventListener('mouseout', (e) => {
-    if (e.target instanceof HTMLImageElement) {
-      hidePreview();
-    }
+    if (!activeTarget) return;
+
+    const leftActive = activeTarget === e.target || activeTarget.contains(e.target);
+    if (!leftActive) return;
+
+    const next = e.relatedTarget;
+    const stillInside = next && (next === activeTarget || activeTarget.contains(next));
+
+    if (!stillInside) hidePreview();
   }, { passive: true });
 
   // --- Event: Hide when pointer leaves the viewport entirely ---
