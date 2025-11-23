@@ -1,13 +1,27 @@
 // ==UserScript==
-// @name         Image Hover Zoom Combined - Safari Edition
+// @name         Image Hover Zoom Combined - Enhanced Edition
 // @namespace    https://paytonison.dev
-// @version      4.1.0
-// @description  Best-in-class image/video hover preview with full resolution detection. Combines advanced URL extraction, smart filtering, and smooth performance. Safari-compatible.
+// @version      5.0.0
+// @description  Best-in-class image/video hover preview with site-specific extraction rules, React component introspection, and support for 20+ major sites. Enhanced with features from MPIV.
 // @author       Payton Ison
 // @match        *://*/*
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==
+
+/*
+ * Enhanced Features (v5.0.0):
+ * - React component introspection for Instagram, Facebook, DeviantArt
+ * - Site-specific extraction for 20+ major sites
+ * - Multi-URL fallback support (e.g., Imgur gif->webm->mp4)
+ * - Enhanced thumbnail detection patterns
+ * - Improved URL upgrade logic
+ *
+ * Supported Sites:
+ * Instagram, Facebook, DeviantArt, Reddit, GitHub, Google Images,
+ * Imgur, Flickr, Amazon, Wikipedia, YouTube, Tumblr, Dropbox,
+ * ImageBam, Imgbox, Gyazo, and many more image hosting sites
+ */
 
 (function () {
   'use strict';
@@ -112,6 +126,51 @@
   const REJECTION_COOLDOWN = 1500;
   const getTime = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
   const isOverlayVisible = () => overlay.style.display !== 'none';
+  const isFF = CSS.supports('-moz-appearance', 'none');
+
+  // --- Utility functions from MPIV ---
+  function tryJSON(str) {
+    try {
+      return JSON.parse(str);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function pick(obj, path, fn) {
+    if (obj && path) {
+      for (const p of path.split('.')) {
+        if (obj) obj = obj[p];
+        else break;
+      }
+    }
+    return fn && obj !== undefined ? fn(obj) : obj;
+  }
+
+  function getReactChildren(el, path) {
+    if (isFF) el = el.wrappedJSObject || el;
+    for (const k of Object.keys(el)) {
+      if (typeof k === 'string' && k.startsWith('__reactProps')) {
+        return (el = el[k].children) && (path ? pick(el, path) : el);
+      }
+    }
+  }
+
+  function getReactProps(el, path) {
+    if (isFF) el = el.wrappedJSObject || el;
+    for (const k of Object.keys(el)) {
+      if (typeof k === 'string' && (k.startsWith('__reactProps') || k.startsWith('__reactFiber'))) {
+        const props = el[k];
+        if (props && props.memoizedProps) {
+          return path ? pick(props.memoizedProps, path) : props.memoizedProps;
+        }
+        if (props && props.return && props.return.memoizedProps) {
+          return path ? pick(props.return.memoizedProps, path) : props.return.memoizedProps;
+        }
+        return path ? pick(props, path) : props;
+      }
+    }
+  }
 
   function cacheUrl(element, url) {
     if (!element || !url) return null;
@@ -246,6 +305,227 @@
     return url;
   }
 
+  // --- Site-specific extraction rules ---
+  function extractSiteSpecificUrl(element) {
+    if (!element) return null;
+    const hostname = window.location.hostname;
+    const href = window.location.href;
+
+    // Instagram
+    if (hostname.includes('instagram.com') || hostname.includes('instagr.am')) {
+      // Try to get data from React components
+      const reactData = getReactProps(element.closest('article') || element);
+      if (reactData) {
+        // Check for video URL
+        const videoUrl = pick(reactData, 'node.video_url') ||
+                        pick(reactData, 'video_url') ||
+                        pick(reactData, 'videoUrl');
+        if (videoUrl) return videoUrl;
+
+        // Check for high-res image
+        const displayUrl = pick(reactData, 'node.display_url') ||
+                          pick(reactData, 'displayUrl') ||
+                          pick(reactData, 'display_url');
+        if (displayUrl) return displayUrl;
+      }
+
+      // Fallback: Look for largest image in srcset
+      const img = element.tagName === 'IMG' ? element : element.querySelector('img');
+      if (img && img.srcset) {
+        const fromSrcSet = extractFromSrcSet(img);
+        if (fromSrcSet) return fromSrcSet;
+      }
+    }
+
+    // Facebook
+    if (hostname.includes('facebook.com')) {
+      const reactData = getReactChildren(element.parentNode);
+      if (reactData) {
+        const origSrc = pick(reactData, (reactData[0] ? '0.props.linkProps' : 'props') + '.passthroughProps.origSrc');
+        if (origSrc) return origSrc;
+      }
+    }
+
+    // DeviantArt
+    if (hostname.includes('deviantart.com')) {
+      if (element.tagName === 'IMG' && element.src && element.src.includes('/v1/')) {
+        const reactData = getReactChildren(element.closest('a'));
+        if (reactData) {
+          const types = pick(reactData, 'props.deviation.media.types');
+          if (types && Array.isArray(types)) {
+            const fullview = types.find(t => t.t === 'fullview');
+            if (fullview) {
+              const match = element.src.match(/^(.+)\/v1\/\w+\/[^/]+\/(.+)-\d+.(\.\w+)(\?.+)/);
+              if (match) {
+                const [, base, name, ext, tok] = match;
+                if (fullview.c) {
+                  return base + fullview.c.replace('<prettyName>', name) + tok;
+                } else if (fullview.w && fullview.h) {
+                  return `${base}/v1/fill/w_${fullview.w},h_${fullview.h}/${name}-fullview${ext}${tok}`;
+                }
+              }
+            }
+          }
+        }
+      }
+      // Look for download button or full image
+      const downloadBtn = document.querySelector('.dev-page-download');
+      if (downloadBtn && downloadBtn.href) return downloadBtn.href;
+      const fullImg = document.querySelector('.dev-content-full');
+      if (fullImg && fullImg.src) return fullImg.src;
+    }
+
+    // Imgur - handle animated formats
+    if (hostname.includes('imgur.com') || element.src && element.src.includes('imgur.com')) {
+      const imgurMatch = (element.src || element.href || '').match(/([a-z]{2,}\.)?imgur\.com\/.*?([a-z0-9]{5,7})(?:[hlmtbs])?\.(jpg|png|gif|webm|mp4)/i);
+      if (imgurMatch) {
+        const id = imgurMatch[2];
+        const ext = imgurMatch[3].toLowerCase();
+        // For gif, try webm first (smaller, better quality)
+        if (ext === 'gif') {
+          return [`https://i.imgur.com/${id}.webm`, `https://i.imgur.com/${id}.mp4`, `https://i.imgur.com/${id}.gif`];
+        }
+        return `https://i.imgur.com/${id}.${ext}`;
+      }
+    }
+
+    // Reddit
+    if (hostname.includes('reddit.com')) {
+      // Look for data-url attribute (common on Reddit)
+      const dataUrl = element.getAttribute('data-url') || element.closest('[data-url]')?.getAttribute('data-url');
+      if (dataUrl && dataUrl.includes('i.redd.it')) {
+        return dataUrl;
+      }
+      // Handle preview.redd.it -> i.redd.it
+      if (element.src && element.src.includes('preview.redd.it')) {
+        return element.src.replace(/preview(\.redd\.it\/\w+\.(jpe?g|png|gif))/i, 'i$1');
+      }
+    }
+
+    // GitHub
+    if (hostname.includes('github.com')) {
+      const url = element.src || element.href || '';
+      // Avatar URLs
+      if (url.includes('avatars') && url.match(/&s=\d+/)) {
+        return url.replace(/&s=\d+/, '&s=460');
+      }
+      // Blob URLs to raw
+      if (url.match(/github\.com\/.+?\/blob\/([^/]+\/.+?\.(avif|webp|png|jpe?g|bmp|gif|cur|ico|svg))$/i)) {
+        const isPrivate = document.querySelector('.AppHeader-context-item > .octicon-lock');
+        if (isPrivate) {
+          return url.replace('/blob/', '/raw/');
+        } else {
+          return url.replace(/github\.com/, 'raw.githubusercontent.com').replace('/blob/', '/');
+        }
+      }
+    }
+
+    // Google Images
+    if (hostname.includes('google.com') && href.includes('tbm=isch')) {
+      const link = element.closest('a[href*="imgurl="]');
+      if (link) {
+        const params = new URLSearchParams(link.search);
+        const imgurl = params.get('imgurl');
+        if (imgurl) return decodeURIComponent(imgurl);
+      }
+    }
+
+    // Flickr - upgrade to original size
+    if (hostname.includes('flickr.com') || (element.src && element.src.includes('flickr.com'))) {
+      const url = element.src || element.href || '';
+      // Remove size suffix (_b, _c, _m, _n, _o, _s, _t, _z)
+      if (url.match(/_[bcmnostz]\.jpg/i)) {
+        return url.replace(/_[bcmnostz]\.jpg/i, '.jpg');
+      }
+    }
+
+    // Amazon - product images
+    if (hostname.includes('amazon.') || (element.src && element.src.includes('images-na.ssl-images-amazon.com'))) {
+      const url = element.src || '';
+      // Remove image size constraints
+      if (url.match(/images\/.+?\.jpg/) && url.includes('._')) {
+        return url.replace(/\._.*?\./g, '.');
+      }
+    }
+
+    // Wikipedia/MediaWiki
+    if (hostname.includes('wiki') || (element.src && element.src.includes('wiki'))) {
+      const url = element.src || element.href || '';
+      // Remove thumbnail sizing
+      if (url.match(/\/(thumb|images)\/.+\.(jpe?g|gif|png|svg)/i)) {
+        return url.replace(/\/thumb\//g, '/').replace(/\/\d+px[^/]+$/, '');
+      }
+    }
+
+    // YouTube thumbnails - upgrade to max quality
+    if (hostname.includes('youtube.com') || (element.src && element.src.includes('ytimg.com'))) {
+      const url = element.src || '';
+      if (url.includes('ytimg.com/vi/')) {
+        const match = url.match(/(.+?\/vi\/[^/]+)/);
+        if (match) return match[1] + '/maxresdefault.jpg';
+      }
+    }
+
+    // ImageBam
+    if (element.src && element.src.includes('imagebam.com')) {
+      const match = element.src.match(/(https:\/\/)thumbs\d+(\.imagebam\.com\/).*?([^/]+)_t\./);
+      if (match) {
+        return match[1] + 'www' + match[2] + 'view/' + match[3];
+      }
+    }
+
+    // Imgbox
+    if (hostname.includes('imgbox.com') || (element.src && element.src.includes('imgbox.com'))) {
+      const url = element.src || element.href || '';
+      // Thumbnail to full resolution
+      if (url.includes('thumbs') && url.match(/\/([a-z0-9]+)\./i)) {
+        const id = url.match(/\/([a-z0-9]+)\./i)[1];
+        return `https://images2.imgbox.com/${id.charAt(0)}/${id.charAt(1)}/${id}.jpg`;
+      }
+    }
+
+    // Gyazo
+    if (hostname.includes('gyazo.com') || (element.src && element.src.includes('gyazo.com'))) {
+      const url = element.href || element.src || '';
+      const match = url.match(/gyazo\.com\/(\w{32,})(\.\w+)?/);
+      if (match && !match[2]) {
+        // No extension means it's a page URL, convert to direct image
+        return `https://i.gyazo.com/${match[1]}.png`;
+      }
+    }
+
+    // Tumblr - larger sizes
+    if (hostname.includes('tumblr.com') || (element.src && element.src.includes('tumblr.com'))) {
+      const url = element.src || '';
+      if (url.includes('_500.jpg')) {
+        return url.replace('_500.', '_1280.');
+      }
+    }
+
+    // Dropbox - max size
+    if (hostname.includes('dropbox.com') || (element.src && element.src.includes('dropbox.com'))) {
+      const url = element.src || element.href || '';
+      if (url.match(/(.+?&size_mode)=\d+(.*)/)) {
+        return url.replace(/(&size_mode)=\d+/, '$1=5');
+      }
+    }
+
+    // Generic image hosting patterns
+    const url = element.src || element.href || '';
+
+    // Generic thumbnail patterns
+    if (url.match(/\/thumb_/)) {
+      return url.replace(/\/thumb_/, '/');
+    }
+
+    // Generic .th. pattern (thumbnail)
+    if (url.match(/\.th\.(jpe?g|gif|png|webm)$/i)) {
+      return url.replace(/\.th\./, '.');
+    }
+
+    return null;
+  }
+
   // --- Main: Extract best image URL ---
   function extractImageUrl(element) {
     if (!element || element.nodeType !== 1) return null;
@@ -254,6 +534,10 @@
     if (cached) return cached;
 
     const tagName = element.tagName;
+
+    // 0. Try site-specific extraction first
+    const siteSpecific = extractSiteSpecificUrl(element);
+    if (siteSpecific) return cacheUrl(element, Array.isArray(siteSpecific) ? siteSpecific[0] : upgradeUrl(siteSpecific));
 
     // 1. Check data attributes (highest priority)
     for (const attr of DATA_ATTRS) {
@@ -419,7 +703,13 @@
   }
 
   // --- Show preview ---
-  function showPreview(target, url) {
+  function showPreview(target, url, urlsToTry) {
+    // Handle URL arrays (multiple fallbacks)
+    if (Array.isArray(url)) {
+      urlsToTry = url.slice(1);
+      url = url[0];
+    }
+
     activeTarget = target;
     activeUrl = url;
 
@@ -510,8 +800,14 @@
       loader.onerror = () => {
         if (pendingLoader === loader) {
           pendingLoader = null;
-          hidePreview();
-          markRejected(target);
+          // Try next URL in array if available
+          if (urlsToTry && urlsToTry.length > 0) {
+            const nextUrl = urlsToTry.shift();
+            showPreview(target, nextUrl, urlsToTry);
+          } else {
+            hidePreview();
+            markRejected(target);
+          }
         }
       };
 
@@ -542,8 +838,14 @@
       loader.onerror = () => {
         if (pendingLoader === loader) {
           pendingLoader = null;
-          hidePreview();
-          markRejected(target);
+          // Try next URL in array if available
+          if (urlsToTry && urlsToTry.length > 0) {
+            const nextUrl = urlsToTry.shift();
+            showPreview(target, nextUrl, urlsToTry);
+          } else {
+            hidePreview();
+            markRejected(target);
+          }
         }
       };
     }
