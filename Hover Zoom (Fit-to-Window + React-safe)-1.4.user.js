@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Hover Zoom (Full-res + IG/FB/Twitter Upscale)
+// @name         Hover Zoom (Fit-to-Window + React-safe)
 // @namespace    http://tampermonkey.net/
-// @version      1.2
-// @description  Full-res hover zoom near cursor, height-limited, with URL upscalers for Instagram, Facebook, and Twitter/X.
+// @version      1.4
+// @description  Hover zoom that fits the image inside the window (both width and height), works on React sites like FB/Twitter/IG CDNs.
 // @author       You
 // @match        *://*/*
 // @grant        none
@@ -13,9 +13,10 @@
 
   // --- CONFIG ----------------------------------------------------
 
-  const MIN_TARGET_SIZE = 40;     // ignore tiny icons etc.
-  const MAX_HEIGHT_VH   = 100;    // constrain only by viewport height
-  const CURSOR_OFFSET   = 20;     // distance from cursor to image
+  const MIN_TARGET_SIZE = 40;      // ignore tiny icons etc.
+  const MAX_WIDTH_VW    = 100;     // max width as % of viewport width
+  const MAX_HEIGHT_VH   = 100;     // max height as % of viewport height
+  const CURSOR_OFFSET   = 20;      // distance from cursor to image
 
   // --- STATE -----------------------------------------------------
 
@@ -26,7 +27,7 @@
   let lastMouseX = 0;
   let lastMouseY = 0;
 
-  // --- UTILITIES -------------------------------------------------
+  // --- PREVIEW UI ------------------------------------------------
 
   function createPreview() {
     if (previewContainer) return;
@@ -46,11 +47,12 @@
     previewImg = document.createElement('img');
     previewImg.style.display = 'block';
 
-    // Full resolution, only limited by viewport height
+    // Fit image inside viewport (both dimensions), keep aspect ratio
     previewImg.style.width = 'auto';
     previewImg.style.height = 'auto';
+    previewImg.style.maxWidth = MAX_WIDTH_VW + 'vw';
     previewImg.style.maxHeight = MAX_HEIGHT_VH + 'vh';
-    previewImg.style.maxWidth = 'none'; // no artificial width cap
+    previewImg.style.objectFit = 'contain';
 
     previewContainer.appendChild(previewImg);
     document.body.appendChild(previewContainer);
@@ -130,8 +132,65 @@
 
   // --- URL UPSCALERS ---------------------------------------------
 
+  function upscaleInstagram(u) {
+    let changed = false;
+
+    const originalPath = u.pathname;
+    let path = originalPath;
+
+    path = path.replace(/\/[sp]\d+x\d+\//g, '/');          // /s1080x1080/, /p640x640/
+    path = path.replace(/\/c\d+\.\d+\.\d+\.\d+\//g, '/');  // /c0.0.1080.1080/
+
+    if (path !== originalPath) {
+      u.pathname = path;
+      changed = true;
+    }
+
+    if (u.searchParams.has('stp')) {
+      u.searchParams.delete('stp');
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  function upscaleFacebook(u) {
+    let changed = false;
+
+    const originalPath = u.pathname;
+    let path = originalPath;
+
+    path = path.replace(/\/[sp]\d+x\d+\//g, '/');
+    path = path.replace(/\/c\d+\.\d+\.\d+\.\d+\//g, '/');
+
+    if (path !== originalPath) {
+      u.pathname = path;
+      changed = true;
+    }
+
+    const resizeParams = ['w', 'h', 'width', 'height'];
+    for (const key of resizeParams) {
+      if (u.searchParams.has(key)) {
+        u.searchParams.delete(key);
+        changed = true;
+      }
+    }
+
+    return changed;
+  }
+
+  function upscaleTwitter(u) {
+    let changed = false;
+
+    if (u.searchParams.get('name') !== 'orig') {
+      u.searchParams.set('name', 'orig');
+      changed = true;
+    }
+
+    return changed;
+  }
+
   function upscaleImageUrl(rawUrl) {
-    // Leave data/blob/etc alone
     if (!rawUrl || rawUrl.startsWith('data:') || rawUrl.startsWith('blob:')) {
       return rawUrl;
     }
@@ -146,42 +205,19 @@
     const host = u.hostname;
     let changed = false;
 
-    // Twitter / X (pbs.twimg.com)
     if (host.includes('twimg.com')) {
-      // Highest quality version is usually `name=orig`
-      if (u.searchParams.get('name') !== 'orig') {
-        u.searchParams.set('name', 'orig');
-        changed = true;
-      }
+      changed = upscaleTwitter(u) || changed;
     }
 
-    // Facebook / Instagram CDNs
+    if (host.includes('cdninstagram.com') || host.endsWith('instagram.com')) {
+      changed = upscaleInstagram(u) || changed;
+    }
+
     if (
       host.includes('fbcdn.net') ||
-      host.includes('facebook.com') ||
-      host.includes('cdninstagram.com') ||
-      host.includes('instagram.com')
+      (host.includes('facebook.com') && !host.includes('instagram.com'))
     ) {
-      let path = u.pathname;
-      const originalPath = path;
-
-      // Remove size/crop segments like /s150x150/, /p206x206/, /c0.0.1080.1080/
-      path = path.replace(/\/[sp]\d+x\d+\//g, '/');
-      path = path.replace(/\/c\d+\.\d+\.\d+\.\d+\//g, '/');
-
-      if (path !== originalPath) {
-        u.pathname = path;
-        changed = true;
-      }
-
-      // Optionally nuke aggressive resize params (conservative subset)
-      const resizeParams = ['w', 'h', 'width', 'height'];
-      for (const key of resizeParams) {
-        if (u.searchParams.has(key)) {
-          u.searchParams.delete(key);
-          changed = true;
-        }
-      }
+      changed = upscaleFacebook(u) || changed;
     }
 
     return changed ? u.toString() : rawUrl;
