@@ -59,8 +59,7 @@
   const VIDEO_EXTENSION_REGEX = /\.(?:mp4|webm|ogg|ogv|mov|m4v)(?:[\?#].*)?$/i;
   const MEDIA_EXTENSION_REGEX = /\.(?:jpe?g|png|gif|webp|avif|bmp|svg|heic|mp4|webm|ogg|ogv|mov|m4v)(?:[\?#].*)?$/i;
   const POINTER_EVENT = window.PointerEvent ? 'pointermove' : 'mousemove';
-  const MIN_SIZE = 40; // Ignore icons/tiny images
-  const MIN_ZOOM_GAIN = 1.2; // Only show if at least 20% larger
+  const MIN_SIZE = 40; // Ignore icons/tiny images (unless a higher-res source exists)
   const MAX_PARENT_SEARCH = 5; // How far up the tree we'll look for a media URL
 
   // --- Create overlay ---
@@ -69,29 +68,29 @@
     position: 'fixed',
     top: '0',
     left: '0',
+    width: '100vw',
+    height: '100vh',
+    background: 'rgba(0, 0, 0, 0.8)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     pointerEvents: 'none',
     zIndex: '2147483647',
-    display: 'none',
     opacity: '0',
-    padding: '10px',
-    borderRadius: '12px',
-    background: 'rgba(0, 0, 0, 0.85)',
-    boxShadow: '0 12px 35px rgba(0, 0, 0, 0.5)',
-    transform: 'translate3d(0, 0, 0)',
     transition: 'opacity 0.12s ease',
-    willChange: 'transform, opacity'
+    willChange: 'opacity'
   });
 
   const previewImg = document.createElement('img');
   previewImg.alt = '';
   Object.assign(previewImg.style, {
     display: 'block',
-    maxWidth: '90vw',
-    maxHeight: '90vh',
     width: 'auto',
     height: 'auto',
+    maxWidth: '100%',
+    maxHeight: '100%',
     objectFit: 'contain',
-    borderRadius: '6px'
+    borderRadius: '0'
   });
 
   const previewVideo = document.createElement('video');
@@ -101,12 +100,12 @@
   previewVideo.preload = 'metadata';
   previewVideo.style.display = 'none';
   Object.assign(previewVideo.style, {
-    maxWidth: '90vw',
-    maxHeight: '90vh',
     width: 'auto',
     height: 'auto',
+    maxWidth: '100%',
+    maxHeight: '100%',
     objectFit: 'contain',
-    borderRadius: '6px'
+    borderRadius: '0'
   });
 
   overlay.appendChild(previewImg);
@@ -118,11 +117,7 @@
   let activeUrl = '';
   let pointerX = 0;
   let pointerY = 0;
-  let rafId = null;
-  let lastPosX = -1;
-  let lastPosY = -1;
   let pendingLoader = null;
-  const margin = 18;
   const urlCache = new WeakMap();
   const rejectionCache = new WeakMap();
   const REJECTION_COOLDOWN = 1500;
@@ -694,6 +689,7 @@
     if (!element || element.nodeType !== 1) return false;
 
     const tagName = element.tagName;
+    const isImg = tagName === 'IMG';
 
     // Text links pointing directly at media should be allowed regardless of size.
     if (tagName === 'A') {
@@ -703,19 +699,21 @@
     const rect = element.getBoundingClientRect();
     const displayWidth = rect.width;
     const displayHeight = rect.height;
+    const hasLargerSource = isImg && element.naturalWidth && element.naturalHeight &&
+      (element.naturalWidth > displayWidth || element.naturalHeight > displayHeight);
 
     // Ignore tiny elements (icons, buttons)
-    if (displayWidth < MIN_SIZE || displayHeight < MIN_SIZE) {
+    if (!hasLargerSource && (displayWidth < MIN_SIZE || displayHeight < MIN_SIZE)) {
       return false;
     }
 
     // For IMG elements, check if already at full resolution
-    if (tagName === 'IMG' && element.naturalWidth && element.naturalHeight) {
+    if (isImg && element.naturalWidth && element.naturalHeight) {
       const widthRatio = displayWidth / element.naturalWidth;
       const heightRatio = displayHeight / element.naturalHeight;
 
-      // Already showing at ~90%+ of natural size
-      if (widthRatio >= 0.9 && heightRatio >= 0.9) {
+      // Already showing at ~98%+ of natural size with no higher-res source
+      if (!hasLargerSource && widthRatio >= 0.98 && heightRatio >= 0.98) {
         return false;
       }
     }
@@ -752,32 +750,7 @@
     return null;
   }
 
-  // --- Position overlay near cursor ---
-  function positionOverlay() {
-    if (overlay.style.display === 'none') return;
 
-    const rect = overlay.getBoundingClientRect();
-    let x = pointerX + margin;
-    let y = pointerY + margin;
-
-    // Keep within viewport
-    if (x + rect.width > window.innerWidth) {
-      x = pointerX - rect.width - margin;
-    }
-    if (y + rect.height > window.innerHeight) {
-      y = pointerY - rect.height - margin;
-    }
-
-    x = Math.max(margin, Math.round(x));
-    y = Math.max(margin, Math.round(y));
-
-    // Avoid redundant DOM updates
-    if (x === lastPosX && y === lastPosY) return;
-
-    lastPosX = x;
-    lastPosY = y;
-    overlay.style.transform = `translate3d(${x}px, ${y}px, 0)`;
-  }
 
   // --- Show preview ---
   function showPreview(target, url, urlsToTry) {
@@ -815,19 +788,6 @@
         return;
       }
 
-      // Validate zoom gain: only show if significantly larger
-      if (target && target.getBoundingClientRect) {
-        const rect = target.getBoundingClientRect();
-        const widthGain = naturalWidth / rect.width;
-        const heightGain = naturalHeight / rect.height;
-
-        if (widthGain < MIN_ZOOM_GAIN && heightGain < MIN_ZOOM_GAIN) {
-          hidePreview();
-          markRejected(target);
-          return;
-        }
-      }
-
       if (type === 'video') {
         previewImg.style.display = 'none';
         previewImg.src = '';
@@ -853,10 +813,9 @@
         previewImg.src = url;
       }
 
-      overlay.style.display = 'block';
+      overlay.style.display = 'flex';
       overlay.style.opacity = '1';
       pendingLoader = null;
-      positionOverlay();
     };
 
     if (VIDEO_EXTENSION_REGEX.test(url)) {
@@ -932,8 +891,6 @@
   function hidePreview() {
     activeTarget = null;
     activeUrl = '';
-    lastPosX = -1;
-    lastPosY = -1;
     overlay.style.opacity = '0';
     overlay.style.display = 'none';
 
@@ -947,11 +904,6 @@
         pendingLoader.pause();
       }
       pendingLoader = null;
-    }
-
-    if (rafId) {
-      cancelAnimationFrame(rafId);
-      rafId = null;
     }
 
     previewImg.src = '';
@@ -977,16 +929,6 @@
       const stillOverTarget = activeTarget === e.target || activeTarget.contains(e.target);
       if (!stillInDom || !stillOverTarget) {
         hidePreview();
-      }
-    }
-
-    // Throttle positioning with RAF
-    if (isOverlayVisible()) {
-      if (!rafId) {
-        rafId = requestAnimationFrame(() => {
-          rafId = null;
-          positionOverlay();
-        });
       }
     }
   }, { passive: true });
@@ -1054,20 +996,4 @@
     if (e.key === 'Escape') hidePreview();
   });
 
-})();
-// ==UserScript==
-// @name         New Userscript
-// @namespace    http://tampermonkey.net/
-// @version      2025-11-25
-// @description  try to take over the world!
-// @author       You
-// @match        https://x.com/home
-// @icon         https://www.google.com/s2/favicons?sz=64&domain=x.com
-// @grant        none
-// ==/UserScript==
-
-(function() {
-    'use strict';
-
-    // Your code here...
 })();
