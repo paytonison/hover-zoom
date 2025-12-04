@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Hover Zoom Combined - Enhanced Edition
 // @namespace    https://paytonison.dev
-// @version      5.1.0
+// @version      5.2.0
 // @description  Best-in-class image/video hover preview with site-specific extraction rules, React component introspection, and support for 20+ major sites. Enhanced with features from MPIV.
 // @author       Payton Ison
 // @match        *://*/*
@@ -10,7 +10,9 @@
 // ==/UserScript==
 
 /*
- * Enhanced Features (v5.1.0):
+ * Enhanced Features (v5.2.0):
+ * - Cursor-following preview (no borders, follows mouse pointer)
+ * - Improved hover detection for quoted/nested content
  * - Deep React Fiber introspection for Instagram (videos & carousel support)
  * - Enhanced Instagram CDN URL upgrading
  * - React component introspection for Facebook, DeviantArt
@@ -70,10 +72,8 @@
     left: '0',
     width: '100vw',
     height: '100vh',
-    background: 'rgba(0, 0, 0, 0.8)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
+    background: 'transparent',
+    display: 'block',
     pointerEvents: 'none',
     zIndex: '2147483647',
     opacity: '0',
@@ -87,10 +87,12 @@
     display: 'block',
     width: 'auto',
     height: 'auto',
-    maxWidth: '100%',
-    maxHeight: '100%',
+    maxWidth: '90vw',
+    maxHeight: '90vh',
     objectFit: 'contain',
-    borderRadius: '0'
+    position: 'fixed',
+    pointerEvents: 'none',
+    zIndex: '2147483647'
   });
 
   const previewVideo = document.createElement('video');
@@ -102,10 +104,12 @@
   Object.assign(previewVideo.style, {
     width: 'auto',
     height: 'auto',
-    maxWidth: '100%',
-    maxHeight: '100%',
+    maxWidth: '90vw',
+    maxHeight: '90vh',
     objectFit: 'contain',
-    borderRadius: '0'
+    position: 'fixed',
+    pointerEvents: 'none',
+    zIndex: '2147483647'
   });
 
   overlay.appendChild(previewImg);
@@ -120,7 +124,7 @@
   let pendingLoader = null;
   const urlCache = new WeakMap();
   const rejectionCache = new WeakMap();
-  const REJECTION_COOLDOWN = 1500;
+  const REJECTION_COOLDOWN = 500;
   const getTime = () => (typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now());
   const isOverlayVisible = () => overlay.style.display !== 'none';
   const isFF = CSS.supports('-moz-appearance', 'none');
@@ -752,6 +756,35 @@
 
 
 
+  // --- Update preview position to follow cursor ---
+  function updatePreviewPosition() {
+    const activeElement = previewImg.style.display === 'block' ? previewImg : previewVideo;
+    if (!activeElement || activeElement.style.display === 'none') return;
+
+    const offset = 20; // Offset from cursor
+    const rect = activeElement.getBoundingClientRect();
+    const imgWidth = rect.width || 0;
+    const imgHeight = rect.height || 0;
+
+    let x = pointerX + offset;
+    let y = pointerY + offset;
+
+    // Keep within viewport bounds
+    if (x + imgWidth > window.innerWidth) {
+      x = pointerX - imgWidth - offset;
+    }
+    if (y + imgHeight > window.innerHeight) {
+      y = pointerY - imgHeight - offset;
+    }
+
+    // Ensure not off-screen
+    x = Math.max(0, Math.min(x, window.innerWidth - imgWidth));
+    y = Math.max(0, Math.min(y, window.innerHeight - imgHeight));
+
+    activeElement.style.left = `${x}px`;
+    activeElement.style.top = `${y}px`;
+  }
+
   // --- Show preview ---
   function showPreview(target, url, urlsToTry) {
     // Handle URL arrays (multiple fallbacks)
@@ -813,9 +846,10 @@
         previewImg.src = url;
       }
 
-      overlay.style.display = 'flex';
+      overlay.style.display = 'block';
       overlay.style.opacity = '1';
       pendingLoader = null;
+      updatePreviewPosition();
     };
 
     if (VIDEO_EXTENSION_REGEX.test(url)) {
@@ -925,6 +959,7 @@
     const visible = isOverlayVisible();
 
     if (visible && activeTarget) {
+      updatePreviewPosition();
       const stillInDom = document.documentElement.contains(activeTarget);
       const stillOverTarget = activeTarget === e.target || activeTarget.contains(e.target);
       if (!stillInDom || !stillOverTarget) {
@@ -955,7 +990,26 @@
 
   // --- Event: Mouse over potential media ---
   document.addEventListener('mouseover', (e) => {
-    const info = findHoverTarget(e.target);
+    // Try the direct target first
+    let info = findHoverTarget(e.target);
+
+    // If no media found on direct target, try element at cursor position
+    // This helps with quoted/nested content where the target might be a wrapper
+    if (!info) {
+      const elementAtPoint = document.elementFromPoint(pointerX, pointerY);
+      if (elementAtPoint && elementAtPoint !== e.target) {
+        info = findHoverTarget(elementAtPoint);
+      }
+    }
+
+    // Still nothing? Try looking for IMG/VIDEO elements near the target
+    if (!info && e.target instanceof Element) {
+      const nearbyMedia = e.target.querySelector('img, video');
+      if (nearbyMedia) {
+        info = findHoverTarget(nearbyMedia);
+      }
+    }
+
     if (!info) return;
 
     const { element, url } = info;
