@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         HoverZoom (Safari) — X/Instagram Full-Res Preview
 // @namespace    asari.hoverzoom
-// @version      1.0.0
-// @description  Hover to preview full-resolution images/videos in an overlay. X/Twitter pbs.twimg.com orig rewrite + srcset max pick + pin/open/copy.
+// @version      1.1.0
+// @description  Hover to preview full-resolution images/videos in an overlay. Fixes Instagram (CDN URLs often live in CSS background-image inside anchors).
 // @author       Asari
 // @match        *://x.com/*
 // @match        *://*.x.com/*
@@ -24,40 +24,38 @@
 // ==/UserScript==
 
 (() => {
-  'use strict';
+  "use strict";
 
-  // -------------------------
-  // Config
-  // -------------------------
   const CFG = {
     enabled: true,
     hoverDelayMs: 140,
     hideDelayMs: 60,
-    maxW: 0.70,          // 70vw
-    maxH: 0.78,          // 78vh
+    maxW: 0.7,
+    maxH: 0.78,
     offsetPx: 16,
-    wheelZoomStep: 0.12, // scale increment per wheel notch
+    wheelZoomStep: 0.12,
     wheelZoomMin: 0.25,
     wheelZoomMax: 5.0,
-    onlyWhenAltHeld: false,   // set true if you want Alt-to-zoom mode
+    onlyWhenAltHeld: false,
     ignoreWhenTyping: true,
     debug: false,
   };
 
-  const log = (...args) => CFG.debug && console.log('[HoverZoom]', ...args);
+  const log = (...args) => CFG.debug && console.log("[HoverZoom]", ...args);
 
-  // -------------------------
-  // Small utilities
-  // -------------------------
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const isEditableTarget = (t) => {
     if (!t) return false;
-    const tag = (t.tagName || '').toLowerCase();
-    return tag === 'input' || tag === 'textarea' || t.isContentEditable;
+    const tag = (t.tagName || "").toLowerCase();
+    return tag === "input" || tag === "textarea" || t.isContentEditable;
   };
 
   function safeURL(u) {
-    try { return new URL(u, location.href); } catch { return null; }
+    try {
+      return new URL(u, location.href);
+    } catch {
+      return null;
+    }
   }
 
   function uniq(arr) {
@@ -72,9 +70,11 @@
   }
 
   function pickLargestFromSrcset(srcset) {
-    // srcset: "url 320w, url 640w, ..."
-    if (!srcset || typeof srcset !== 'string') return null;
-    const parts = srcset.split(',').map(s => s.trim()).filter(Boolean);
+    if (!srcset || typeof srcset !== "string") return null;
+    const parts = srcset
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     let best = null;
     let bestW = -1;
     for (const p of parts) {
@@ -82,9 +82,11 @@
       if (m) {
         const url = m[1];
         const w = parseInt(m[2], 10);
-        if (w > bestW) { bestW = w; best = url; }
+        if (w > bestW) {
+          bestW = w;
+          best = url;
+        }
       } else {
-        // fallback: if no width descriptor, just take last
         best = p.split(/\s+/)[0];
       }
     }
@@ -95,58 +97,111 @@
     if (!el) return null;
     const cs = getComputedStyle(el);
     const bg = cs && cs.backgroundImage;
-    if (!bg || bg === 'none') return null;
+    if (!bg || bg === "none") return null;
     const m = bg.match(/url\(["']?(.+?)["']?\)/i);
     return m ? m[1] : null;
   }
 
+  // Walk up a bit: stable enough to not thrash on IG
   function closestInteresting(el) {
     if (!el) return null;
-    const img = el.closest && el.closest('img');
+    const img = el.closest && el.closest("img");
     if (img) return img;
-    const vid = el.closest && el.closest('video');
+    const vid = el.closest && el.closest("video");
     if (vid) return vid;
-    const a = el.closest && el.closest('a[href]');
+
+    // Don’t immediately jump to <a>. IG often wraps media in <a> but the actual URL is inside.
+    const a = el.closest && el.closest("a[href]");
     if (a) return a;
+
+    // Background-image tiles often live on divs; fallback to nearest element
     return el;
   }
 
+  // Scan descendants (limited) looking for CSS background-image urls.
+  function findBgUrlInSubtree(root, maxNodes = 80) {
+    if (!root) return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    let n = 0;
+    while (walker.nextNode()) {
+      const el = walker.currentNode;
+      const bg = extractCssBgUrl(el);
+      if (bg) return bg;
+      n++;
+      if (n >= maxNodes) break;
+    }
+    return null;
+  }
+
+  // For IG: anchors wrap the media; prefer media inside anchor over href.
   function elementMediaHint(el) {
-    // Try to extract a usable media URL from common attributes.
     if (!el) return null;
+    const tag = (el.tagName || "").toLowerCase();
 
-    const tag = (el.tagName || '').toLowerCase();
-
-    if (tag === 'img') {
-      // currentSrc is usually best (after srcset selection)
-      const srcsetBest = pickLargestFromSrcset(el.getAttribute('srcset'));
-      return el.currentSrc || srcsetBest || el.src || el.getAttribute('src') ||
-             el.getAttribute('data-src') || el.getAttribute('data-url') || null;
+    if (tag === "img") {
+      const srcsetBest = pickLargestFromSrcset(el.getAttribute("srcset"));
+      return (
+        el.currentSrc ||
+        srcsetBest ||
+        el.src ||
+        el.getAttribute("src") ||
+        el.getAttribute("data-src") ||
+        el.getAttribute("data-url") ||
+        null
+      );
     }
 
-    if (tag === 'video') {
-      // video might be blob:; use poster as fallback
-      const src = el.currentSrc || el.src || el.getAttribute('src');
-      if (src && !String(src).startsWith('blob:')) return src;
-      return el.poster || el.getAttribute('poster') || null;
+    if (tag === "video") {
+      const src = el.currentSrc || el.src || el.getAttribute("src");
+      if (src && !String(src).startsWith("blob:")) return src;
+      return el.poster || el.getAttribute("poster") || null;
     }
 
-    if (tag === 'a') {
-      const href = el.href || el.getAttribute('href');
-      if (href) return href;
+    // IMPORTANT: handle <a> specially (Instagram)
+    if (tag === "a") {
+      // 1) look for img inside (IG often uses <img ... srcset=...>)
+      const img = el.querySelector("img");
+      if (img) {
+        const srcsetBest = pickLargestFromSrcset(img.getAttribute("srcset"));
+        const got =
+          img.currentSrc ||
+          srcsetBest ||
+          img.src ||
+          img.getAttribute("src") ||
+          img.getAttribute("data-src") ||
+          img.getAttribute("data-url");
+        if (got) return got;
+      }
+
+      // 2) look for video inside
+      const vid = el.querySelector("video");
+      if (vid) {
+        const src = vid.currentSrc || vid.src || vid.getAttribute("src");
+        if (src && !String(src).startsWith("blob:")) return src;
+        const poster = vid.poster || vid.getAttribute("poster");
+        if (poster) return poster;
+      }
+
+      // 3) look for CSS background-image inside anchor (THIS is your scontent-… case)
+      const bg = findBgUrlInSubtree(el, 120);
+      if (bg) return bg;
+
+      // 4) only now fall back to href
+      return el.href || el.getAttribute("href") || null;
     }
 
-    // background-image candidates (common on X)
+    // Non-anchor: check background-image on self first
     const bg = extractCssBgUrl(el);
     if (bg) return bg;
 
     // data-* fallbacks
-    return el.getAttribute?.('data-src') || el.getAttribute?.('data-url') || null;
+    return (
+      el.getAttribute?.("data-src") || el.getAttribute?.("data-url") || null
+    );
   }
 
   // -------------------------
-  // URL resolvers (site-aware)
-  // Returns: { type: 'image'|'video', candidates: [url1, url2, ...] }
+  // URL resolvers
   // -------------------------
   function resolveMedia(urlStr) {
     const u = safeURL(urlStr);
@@ -154,123 +209,127 @@
 
     const host = u.hostname;
     const path = u.pathname;
-
-    // If it's an obvious direct image/video, keep it.
     const lowerPath = path.toLowerCase();
-    const looksImage = /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(urlStr) || /\/media\//i.test(path);
-    const looksVideo = /\.(mp4|webm|mov)(\?|$)/i.test(urlStr) || host.includes('video');
 
-    // 1) X/Twitter images: pbs.twimg.com
-    // Typical: https://pbs.twimg.com/media/XYZ?format=jpg&name=medium
-    // Full:    https://pbs.twimg.com/media/XYZ?format=jpg&name=orig
-    // Note: some images 404 if format mismatched; we try fallbacks.  [oai_citation:0‡Gist](https://gist.github.com/Colerar/80da426728e38a907cc811ac821bf307?utm_source=chatgpt.com)
-    if (host === 'pbs.twimg.com') {
-      // Profile images: remove _normal/_bigger/_mini to get larger.
-      if (path.startsWith('/profile_images/')) {
-        const base = urlStr.replace(/_(normal|bigger|mini)(?=\.)/i, '');
-        return { type: 'image', candidates: uniq([base, urlStr]) };
+    const looksImage =
+      /\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(urlStr) ||
+      /\/media\//i.test(path);
+    const looksVideo = /\.(mp4|webm|mov)(\?|$)/i.test(urlStr);
+
+    // Avoid trying to preview IG post pages (we want the CDN asset)
+    if (
+      (host === "instagram.com" || host.endsWith(".instagram.com")) &&
+      /^\/(p|reel|tv)\//i.test(path)
+    ) {
+      return null;
+    }
+
+    // X/Twitter images
+    if (host === "pbs.twimg.com") {
+      if (path.startsWith("/profile_images/")) {
+        const base = urlStr.replace(/_(normal|bigger|mini)(?=\.)/i, "");
+        return { type: "image", candidates: uniq([base, urlStr]) };
       }
 
-      // Old suffix style: ...:small / :large / :orig (still seen in some places)
       if (/:small$|:medium$|:large$/i.test(urlStr)) {
-        const cand = urlStr.replace(/:(small|medium|large)$/i, ':orig');
-        return { type: 'image', candidates: uniq([cand, urlStr]) };
+        const cand = urlStr.replace(/:(small|medium|large)$/i, ":orig");
+        return { type: "image", candidates: uniq([cand, urlStr]) };
       }
 
-      // Query-param style
-      const formatsToTry = ['jpg', 'png', 'webp'];
+      const formatsToTry = ["jpg", "png", "webp"];
       const q = u.searchParams;
-      const existingFormat = q.get('format');
-      const existingName = q.get('name');
-
-      // Try to infer format from path extension if present
+      const existingFormat = q.get("format");
+      const existingName = q.get("name");
       const extMatch = lowerPath.match(/\.(jpg|jpeg|png|webp|gif)$/i);
-      const inferred = extMatch ? (extMatch[1].toLowerCase() === 'jpeg' ? 'jpg' : extMatch[1].toLowerCase()) : null;
+      const inferred = extMatch
+        ? extMatch[1].toLowerCase() === "jpeg"
+          ? "jpg"
+          : extMatch[1].toLowerCase()
+        : null;
 
-      const fmtFirst = existingFormat || inferred || 'jpg';
+      const fmtFirst = existingFormat || inferred || "jpg";
       const fmtOrder = uniq([fmtFirst, ...formatsToTry]);
 
       const base = new URL(u.toString());
-      base.searchParams.set('name', 'orig');
-      // keep any other params that matter, but ensure format gets set per attempt.
+      base.searchParams.set("name", "orig");
 
       const candidates = [];
       for (const fmt of fmtOrder) {
         const t = new URL(base.toString());
-        t.searchParams.set('format', fmt);
+        t.searchParams.set("format", fmt);
         candidates.push(t.toString());
       }
 
-      // Also try a "4096x4096" variant sometimes used by X (nice when it exists)
-      if (existingName && /^\d+x\d+$/i.test(existingName)) {
-        const t = new URL(u.toString());
-        t.searchParams.set('name', 'orig');
-        candidates.unshift(t.toString());
-      } else {
-        const t = new URL(u.toString());
-        t.searchParams.set('name', '4096x4096');
-        if (existingFormat) t.searchParams.set('format', existingFormat);
-        candidates.push(t.toString());
-      }
+      const t4096 = new URL(u.toString());
+      t4096.searchParams.set("name", "4096x4096");
+      if (existingFormat) t4096.searchParams.set("format", existingFormat);
+      candidates.push(t4096.toString());
 
-      return { type: 'image', candidates: uniq([...candidates, urlStr]) };
+      return { type: "image", candidates: uniq([...candidates, urlStr]) };
     }
 
-    // 2) Reddit: preview.redd.it -> i.redd.it attempt (best effort)
-    // A lot of reddit "preview" URLs have width/crop params; stripping + switching host often helps in-browser.
-    if (host === 'preview.redd.it') {
+    // Reddit preview -> i.redd.it attempt
+    if (host === "preview.redd.it") {
       const noQuery = `${u.origin}${u.pathname}`;
       const iHost = new URL(noQuery);
-      iHost.hostname = 'i.redd.it';
-      return { type: 'image', candidates: uniq([iHost.toString(), noQuery, urlStr]) };
+      iHost.hostname = "i.redd.it";
+      return {
+        type: "image",
+        candidates: uniq([iHost.toString(), noQuery, urlStr]),
+      };
     }
 
-    // 3) Imgur: remove size suffix letter before extension (e.g. abcdefh.jpg -> abcdef.jpg)
-    if (host.endsWith('imgur.com')) {
-      // If it's already i.imgur.com direct, normalize sizes; else let user click open.
-      // Common sizes: s b t m l h (and more). This targets the classic pattern.
-      const direct = urlStr.includes('i.imgur.com') ? urlStr : null;
-      const candBase = (direct || urlStr).replace(/([a-zA-Z0-9]+)[sbtmlh](\.(png|jpe?g|gif|webp))(\?.*)?$/i, '$1$2$4');
+    // Imgur size suffix stripping
+    if (host.endsWith("imgur.com")) {
+      const candBase = urlStr.replace(
+        /([a-zA-Z0-9]+)[sbtmlh](\.(png|jpe?g|gif|webp))(\?.*)?$/i,
+        "$1$2$4",
+      );
       if (candBase !== urlStr) {
-        return { type: 'image', candidates: uniq([candBase, urlStr]) };
+        return { type: "image", candidates: uniq([candBase, urlStr]) };
       }
     }
 
-    // 4) Instagram: usually best available is already in srcset; we mainly trust src/srcset.
-    // If you hover a CDN URL, prefer the raw path without extra resizing params when present.
-    if (host.includes('cdninstagram') || host.includes('instagram')) {
-      // Don’t over-rewrite (IG changes constantly); just try removing obvious size params if present.
-      // Keep as a best-effort "clean".
-      const clean = new URL(u.toString());
-      // Some IG URLs include "se=" or "stp=" etc; removing can break auth/CDN, so we keep query.
-      return { type: looksVideo ? 'video' : 'image', candidates: uniq([clean.toString(), urlStr]) };
+    // Instagram CDN assets: keep query params (they often matter)
+    if (
+      host.includes("cdninstagram") ||
+      host.includes("scontent") ||
+      host.includes("instagram")
+    ) {
+      if (looksVideo)
+        return { type: "video", candidates: [u.toString(), urlStr] };
+      if (looksImage)
+        return { type: "image", candidates: [u.toString(), urlStr] };
+
+      // Sometimes IG assets don’t end with an extension in weird cases; treat as image anyway.
+      if (host.includes("cdninstagram") || host.includes("scontent")) {
+        return { type: "image", candidates: [u.toString(), urlStr] };
+      }
     }
 
-    // Generic: if it looks like media, use as-is
-    if (looksVideo) return { type: 'video', candidates: [urlStr] };
-    if (looksImage) return { type: 'image', candidates: [urlStr] };
+    if (looksVideo) return { type: "video", candidates: [urlStr] };
+    if (looksImage) return { type: "image", candidates: [urlStr] };
 
-    // If it's a link to a tweet/post page, not a direct media link, we bail (no scraping pages on hover).
     return null;
   }
 
   // -------------------------
-  // Overlay UI (shadow DOM so sites can’t mess with it)
+  // Overlay UI (shadow DOM)
   // -------------------------
-  const host = document.createElement('div');
-  host.id = 'asari-hoverzoom-host';
-  host.style.position = 'fixed';
-  host.style.left = '0';
-  host.style.top = '0';
-  host.style.width = '0';
-  host.style.height = '0';
-  host.style.zIndex = '2147483647';
-  host.style.pointerEvents = 'none'; // overlay won’t steal hover
+  const host = document.createElement("div");
+  host.id = "asari-hoverzoom-host";
+  host.style.position = "fixed";
+  host.style.left = "0";
+  host.style.top = "0";
+  host.style.width = "0";
+  host.style.height = "0";
+  host.style.zIndex = "2147483647";
+  host.style.pointerEvents = "none";
   document.documentElement.appendChild(host);
 
-  const shadow = host.attachShadow({ mode: 'open' });
+  const shadow = host.attachShadow({ mode: "open" });
 
-  const style = document.createElement('style');
+  const style = document.createElement("style");
   style.textContent = `
     .wrap {
       position: fixed;
@@ -286,6 +345,7 @@
       -webkit-backdrop-filter: blur(10px);
       border: 1px solid rgba(255,255,255,.10);
       pointer-events: none;
+      display: none;
     }
     .inner {
       display: grid;
@@ -319,16 +379,6 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .spinner {
-      width: 22px;
-      height: 22px;
-      border-radius: 999px;
-      border: 2px solid rgba(255,255,255,.25);
-      border-top-color: rgba(255,255,255,.85);
-      animation: spin .8s linear infinite;
-      margin: 18px;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
     .hint {
       position:absolute;
       left: 10px;
@@ -345,24 +395,34 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .spinner {
+      width: 22px;
+      height: 22px;
+      border-radius: 999px;
+      border: 2px solid rgba(255,255,255,.25);
+      border-top-color: rgba(255,255,255,.85);
+      animation: spin .8s linear infinite;
+      margin: 18px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   `;
 
-  const wrap = document.createElement('div');
-  wrap.className = 'wrap';
+  const wrap = document.createElement("div");
+  wrap.className = "wrap";
 
-  const inner = document.createElement('div');
-  inner.className = 'inner';
+  const inner = document.createElement("div");
+  inner.className = "inner";
 
-  const hud = document.createElement('div');
-  hud.className = 'hud';
-  hud.textContent = 'HoverZoom';
+  const hud = document.createElement("div");
+  hud.className = "hud";
+  hud.textContent = "HoverZoom";
 
-  const hint = document.createElement('div');
-  hint.className = 'hint';
-  hint.textContent = 'Esc: hide • P: pin • O: open • C: copy • Wheel: zoom';
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = "Esc: hide • P: pin • O: open • C: copy • Wheel: zoom";
 
-  const spinner = document.createElement('div');
-  spinner.className = 'spinner';
+  const spinner = document.createElement("div");
+  spinner.className = "spinner";
 
   inner.appendChild(spinner);
   inner.appendChild(hud);
@@ -372,49 +432,47 @@
   shadow.appendChild(style);
   shadow.appendChild(wrap);
 
-  // Media element (swap between img/video)
   let mediaEl = null;
 
   function setMediaElement(type) {
     if (mediaEl && mediaEl.parentNode) mediaEl.parentNode.removeChild(mediaEl);
 
-    if (type === 'video') {
-      const v = document.createElement('video');
+    if (type === "video") {
+      const v = document.createElement("video");
       v.muted = true;
       v.loop = true;
       v.playsInline = true;
       v.autoplay = true;
       v.controls = false;
+      // Help some CDNs that care about Referer; keep origin on cross-site.
+      v.referrerPolicy = "strict-origin-when-cross-origin";
       mediaEl = v;
     } else {
-      mediaEl = document.createElement('img');
-      mediaEl.decoding = 'async';
-      mediaEl.loading = 'eager';
+      const img = document.createElement("img");
+      img.decoding = "async";
+      img.loading = "eager";
+      img.referrerPolicy = "strict-origin-when-cross-origin";
+      mediaEl = img;
     }
     inner.insertBefore(mediaEl, hud);
   }
 
-  // -------------------------
-  // Loading + state
-  // -------------------------
   let hoverTimer = null;
   let hideTimer = null;
   let pinned = false;
 
   let lastTarget = null;
-  let lastResolvedUrl = null;
+  let lastResolvedKey = null;
   let lastRaw = null;
 
   let mouseX = 0;
   let mouseY = 0;
-
   let zoom = 1;
 
   function positionOverlay() {
     const vpW = window.innerWidth;
     const vpH = window.innerHeight;
 
-    // We don’t know wrap size until it renders; measure then clamp into viewport.
     const rect = wrap.getBoundingClientRect();
     const w = rect.width || 320;
     const h = rect.height || 240;
@@ -432,24 +490,25 @@
   }
 
   function showOverlay() {
-    wrap.style.display = 'block';
+    wrap.style.display = "block";
     positionOverlay();
   }
 
   function hideOverlay(force = false) {
     if (pinned && !force) return;
-    lastResolvedUrl = null;
+    lastResolvedKey = null;
     lastRaw = null;
     zoom = 1;
-    if (mediaEl) mediaEl.style.transform = 'scale(1)';
-    wrap.style.transform = 'translate3d(-9999px,-9999px,0)';
-    wrap.style.display = 'none';
-    spinner.style.display = 'block';
-    if (mediaEl) mediaEl.removeAttribute('src');
+    if (mediaEl) mediaEl.style.transform = "scale(1)";
+    wrap.style.transform = "translate3d(-9999px,-9999px,0)";
+    wrap.style.display = "none";
+    spinner.style.display = "block";
+    if (mediaEl) mediaEl.removeAttribute("src");
   }
 
-  function setHud(text) { hud.textContent = text; }
-
+  function setHud(text) {
+    hud.textContent = text;
+  }
   function setZoom(z) {
     zoom = clamp(z, CFG.wheelZoomMin, CFG.wheelZoomMax);
     if (mediaEl) mediaEl.style.transform = `scale(${zoom})`;
@@ -457,18 +516,14 @@
 
   async function tryLoadCandidates(type, candidates) {
     candidates = uniq(candidates);
-
     if (!candidates.length) return null;
 
-    if (type === 'video') {
-      // For video, we’ll just try first URL and rely on canplay; many sites stream weirdly.
-      return candidates[0];
-    }
+    if (type === "video") return candidates[0];
 
-    // For images, probe each candidate.
     for (const url of candidates) {
       const ok = await new Promise((resolve) => {
         const im = new Image();
+        im.referrerPolicy = "strict-origin-when-cross-origin";
         im.onload = () => resolve(true);
         im.onerror = () => resolve(false);
         im.src = url;
@@ -483,39 +538,38 @@
     if (!resolved) return;
 
     const { type, candidates } = resolved;
-
-    // Avoid thrashing if we’re already showing the same thing.
     const key = candidates[0] || rawUrl;
-    if (lastResolvedUrl === key && wrap.style.display === 'block') return;
 
-    lastResolvedUrl = key;
+    if (lastResolvedKey === key && wrap.style.display === "block") return;
+
+    lastResolvedKey = key;
     lastRaw = rawUrl;
 
     setMediaElement(type);
-    spinner.style.display = 'block';
-    setHud('Loading…');
-
+    spinner.style.display = "block";
+    setHud("Loading…");
     showOverlay();
 
     const chosen = await tryLoadCandidates(type, candidates);
     if (!chosen) {
-      setHud('No preview (blocked/404)');
+      setHud("No preview (blocked/expired)");
       return;
     }
 
-    // If the user moved on while we were loading, don’t pop old media.
-    if (!lastResolvedUrl || lastResolvedUrl !== key) return;
+    if (!lastResolvedKey || lastResolvedKey !== key) return;
 
-    if (type === 'video') {
+    if (type === "video") {
       mediaEl.src = chosen;
-      try { await mediaEl.play(); } catch {}
+      try {
+        await mediaEl.play();
+      } catch {}
       setHud(new URL(chosen).hostname);
     } else {
       mediaEl.src = chosen;
       setHud(new URL(chosen).hostname);
     }
 
-    spinner.style.display = 'none';
+    spinner.style.display = "none";
     setZoom(1);
     positionOverlay();
   }
@@ -530,20 +584,16 @@
     hideTimer = setTimeout(() => hideOverlay(false), CFG.hideDelayMs);
   }
 
-  // -------------------------
-  // Event handlers
-  // -------------------------
   function onPointerMove(e) {
     mouseX = e.clientX;
     mouseY = e.clientY;
-    if (wrap.style.display === 'block') positionOverlay();
+    if (wrap.style.display === "block") positionOverlay();
   }
 
   function shouldIgnore(e) {
     if (!CFG.enabled) return true;
     if (CFG.onlyWhenAltHeld && !e.altKey) return true;
     if (CFG.ignoreWhenTyping && isEditableTarget(e.target)) return true;
-    // Don’t preview while user is dragging/selecting.
     if (e.buttons && e.buttons !== 0) return true;
     return false;
   }
@@ -553,8 +603,6 @@
 
     const t = closestInteresting(e.target);
     if (!t || t === lastTarget) return;
-
-    // ignore our own overlay
     if (t === host || shadow.contains(t)) return;
 
     const raw = elementMediaHint(t);
@@ -568,7 +616,6 @@
     if (hideTimer) clearTimeout(hideTimer);
 
     hoverTimer = setTimeout(() => {
-      // If user moved away before delay, bail.
       if (t !== lastTarget) return;
       startPreviewFromUrl(raw);
     }, CFG.hoverDelayMs);
@@ -576,7 +623,6 @@
 
   function onPointerOut(e) {
     if (pinned) return;
-    // If leaving the current target, schedule hide.
     const leaving = e.target;
     if (leaving && leaving === lastTarget) {
       lastTarget = null;
@@ -586,101 +632,97 @@
   }
 
   function onKeyDown(e) {
-    // Hard stop if typing in a field
     if (CFG.ignoreWhenTyping && isEditableTarget(e.target)) return;
-
     const k = e.key.toLowerCase();
 
-    if (k === 'escape') {
+    if (k === "escape") {
       pinned = false;
       hideOverlay(true);
       return;
     }
-
-    if (k === 'z') {
+    if (k === "z") {
       CFG.enabled = !CFG.enabled;
       if (!CFG.enabled) hideOverlay(true);
       return;
     }
-
-    if (k === 'p') {
-      if (wrap.style.display === 'block') pinned = !pinned;
+    if (k === "p") {
+      if (wrap.style.display === "block") pinned = !pinned;
       return;
     }
 
-    if (k === 'o') {
+    if (k === "o") {
       if (!lastRaw) return;
       const resolved = resolveMedia(lastRaw);
       const openUrl = resolved?.candidates?.[0] || lastRaw;
-      window.open(openUrl, '_blank', 'noopener,noreferrer');
+      window.open(openUrl, "_blank", "noopener,noreferrer");
       return;
     }
 
-    if (k === 'c') {
+    if (k === "c") {
       if (!lastRaw) return;
       const resolved = resolveMedia(lastRaw);
       const copyUrl = resolved?.candidates?.[0] || lastRaw;
-      if (typeof GM_setClipboard === 'function') GM_setClipboard(copyUrl);
+      if (typeof GM_setClipboard === "function") GM_setClipboard(copyUrl);
       else navigator.clipboard?.writeText(copyUrl).catch(() => {});
       return;
     }
 
-    if (k === 'd') {
-      // Best-effort download
+    if (k === "d") {
       if (!lastRaw) return;
       const resolved = resolveMedia(lastRaw);
       const dlUrl = resolved?.candidates?.[0] || lastRaw;
-      if (typeof GM_download === 'function') {
+      if (typeof GM_download === "function") {
         const filename = (() => {
           try {
             const uu = new URL(dlUrl);
-            const base = uu.pathname.split('/').pop() || 'image';
-            return base.split('?')[0];
-          } catch { return 'image'; }
+            const base = uu.pathname.split("/").pop() || "image";
+            return base.split("?")[0];
+          } catch {
+            return "image";
+          }
         })();
         GM_download({ url: dlUrl, name: filename });
       } else {
-        window.open(dlUrl, '_blank', 'noopener,noreferrer');
+        window.open(dlUrl, "_blank", "noopener,noreferrer");
       }
     }
   }
 
   function onWheel(e) {
-    if (wrap.style.display !== 'block') return;
-    // prevent page scroll while zooming preview
+    if (wrap.style.display !== "block") return;
     e.preventDefault();
-
     const delta = Math.sign(e.deltaY);
     const next = zoom * (1 - delta * CFG.wheelZoomStep);
     setZoom(next);
     positionOverlay();
   }
 
-  // -------------------------
-  // Menu (Tampermonkey etc.)
-  // -------------------------
-  if (typeof GM_registerMenuCommand === 'function') {
-    GM_registerMenuCommand('Toggle HoverZoom (Z)', () => {
+  if (typeof GM_registerMenuCommand === "function") {
+    GM_registerMenuCommand("Toggle HoverZoom (Z)", () => {
       CFG.enabled = !CFG.enabled;
       if (!CFG.enabled) hideOverlay(true);
     });
-    GM_registerMenuCommand('Toggle Alt-only mode', () => {
+    GM_registerMenuCommand("Toggle Alt-only mode", () => {
       CFG.onlyWhenAltHeld = !CFG.onlyWhenAltHeld;
     });
   }
 
-  // -------------------------
-  // Hook it up
-  // -------------------------
-  document.addEventListener('pointermove', onPointerMove, { capture: true, passive: true });
-  document.addEventListener('pointerover', onPointerOver, { capture: true, passive: true });
-  document.addEventListener('pointerout', onPointerOut, { capture: true, passive: true });
-  document.addEventListener('keydown', onKeyDown, { capture: true });
-
-  // We want wheel zoom to be non-passive so we can preventDefault.
-  window.addEventListener('wheel', onWheel, { capture: true, passive: false });
+  document.addEventListener("pointermove", onPointerMove, {
+    capture: true,
+    passive: true,
+  });
+  document.addEventListener("pointerover", onPointerOver, {
+    capture: true,
+    passive: true,
+  });
+  document.addEventListener("pointerout", onPointerOut, {
+    capture: true,
+    passive: true,
+  });
+  document.addEventListener("keydown", onKeyDown, { capture: true });
+  window.addEventListener("wheel", onWheel, { capture: true, passive: false });
 
   hideOverlay(true);
-
-  log('loaded');
+  log("loaded");
 })();
+
