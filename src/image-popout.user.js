@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      0.2.0
+// @version      0.2.1
 // @description  Hover images for a near-cursor preview (wheel resizes; click pins; Z toggles; Esc hides). Alt/Option-click opens a movable, resizable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -185,6 +185,8 @@
   }
 
   function getViewport() {
+    const vv = window.visualViewport;
+    if (vv?.width && vv?.height) return { width: vv.width, height: vv.height };
     return { width: window.innerWidth, height: window.innerHeight };
   }
 
@@ -433,8 +435,14 @@
     // Show quickly with a reasonable default size; refine after the image loads.
     const { width: vw, height: vh } = getViewport();
     const padding = OPTIONS.viewportPadding;
-    const defaultW = clamp(520, OPTIONS.minWidth, Math.floor(vw * OPTIONS.maxViewportFraction));
-    const defaultH = clamp(420, OPTIONS.minHeight, Math.floor(vh * OPTIONS.maxViewportFraction));
+    const maxW0 = Math.max(1, Math.floor(vw - padding * 2));
+    const maxH0 = Math.max(1, Math.floor(vh - padding * 2));
+    const defaultMaxW = Math.min(Math.floor(vw * OPTIONS.maxViewportFraction), maxW0);
+    const defaultMaxH = Math.min(Math.floor(vh * OPTIONS.maxViewportFraction), maxH0);
+    const defaultMinW = defaultMaxW >= OPTIONS.minWidth ? OPTIONS.minWidth : 1;
+    const defaultMinH = defaultMaxH >= OPTIONS.minHeight ? OPTIONS.minHeight : 1;
+    const defaultW = clamp(520, defaultMinW, defaultMaxW);
+    const defaultH = clamp(420, defaultMinH, defaultMaxH);
 
     const initialLeft = clamp(
       Math.floor(clickX + padding),
@@ -463,18 +471,24 @@
       // Fit the image into the viewport while keeping aspect ratio.
       const { width: vw2, height: vh2 } = getViewport();
       const titlebarHeight = 40;
-      const maxW = Math.floor(vw2 * OPTIONS.maxViewportFraction);
-      const maxBodyH = Math.floor(vh2 * OPTIONS.maxViewportFraction) - titlebarHeight;
+      const maxWAvail = Math.max(1, Math.floor(vw2 - padding * 2));
+      const maxHAvail = Math.max(1, Math.floor(vh2 - padding * 2));
+      const maxW = Math.min(Math.floor(vw2 * OPTIONS.maxViewportFraction), maxWAvail);
+      const maxWinH = Math.min(Math.floor(vh2 * OPTIONS.maxViewportFraction), maxHAvail);
+      const maxBodyH = Math.max(1, maxWinH - titlebarHeight);
 
       const naturalW = img.naturalWidth || defaultW;
       const naturalH = img.naturalHeight || (defaultH - titlebarHeight);
       const scale = Math.min(maxW / naturalW, maxBodyH / naturalH, OPTIONS.maxScaleUp);
 
-      const winW = clamp(Math.floor(naturalW * scale), OPTIONS.minWidth, maxW);
+      const winMinW = maxW >= OPTIONS.minWidth ? OPTIONS.minWidth : 1;
+      const winMinH = maxWinH >= OPTIONS.minHeight ? OPTIONS.minHeight : 1;
+
+      const winW = clamp(Math.floor(naturalW * scale), winMinW, maxW);
       const winH = clamp(
         Math.floor(naturalH * scale) + titlebarHeight,
-        OPTIONS.minHeight,
-        Math.floor(vh2 * OPTIONS.maxViewportFraction)
+        winMinH,
+        maxWinH
       );
 
       // Keep the window anchored near where it was opened, but clamped to the viewport.
@@ -495,6 +509,35 @@
   function closePopout() {
     if (!STATE.overlay) return;
     STATE.overlay.classList.remove("ip-open");
+  }
+
+  function clampPopoutToViewport() {
+    if (!STATE.overlay || !STATE.popout) return;
+    if (!STATE.overlay.classList.contains("ip-open")) return;
+
+    const popout = STATE.popout;
+    const { width: vw, height: vh } = getViewport();
+    const padding = OPTIONS.viewportPadding;
+
+    const rect = popout.getBoundingClientRect();
+    const maxW = Math.max(1, Math.floor(vw - padding * 2));
+    const maxH = Math.max(1, Math.floor(vh - padding * 2));
+
+    const nextW = clamp(rect.width, 1, maxW);
+    const nextH = clamp(rect.height, 1, maxH);
+
+    let left = Number.parseFloat(popout.style.left);
+    let top = Number.parseFloat(popout.style.top);
+    if (!Number.isFinite(left)) left = rect.left;
+    if (!Number.isFinite(top)) top = rect.top;
+
+    left = clamp(left, padding, Math.max(padding, vw - nextW - padding));
+    top = clamp(top, padding, Math.max(padding, vh - nextH - padding));
+
+    popout.style.left = `${Math.floor(left)}px`;
+    popout.style.top = `${Math.floor(top)}px`;
+    popout.style.width = `${Math.floor(nextW)}px`;
+    popout.style.height = `${Math.floor(nextH)}px`;
   }
 
   function startDrag(event) {
@@ -567,16 +610,13 @@
       const { width: vw, height: vh } = getViewport();
       const padding = OPTIONS.viewportPadding;
 
-      const nextW = clamp(
-        startW + (moveEvent.clientX - startX),
-        OPTIONS.minWidth,
-        Math.max(OPTIONS.minWidth, vw - startLeft - padding)
-      );
-      const nextH = clamp(
-        startH + (moveEvent.clientY - startY),
-        OPTIONS.minHeight,
-        Math.max(OPTIONS.minHeight, vh - startTop - padding)
-      );
+      const maxW = Math.max(1, vw - startLeft - padding);
+      const maxH = Math.max(1, vh - startTop - padding);
+      const minW = maxW >= OPTIONS.minWidth ? OPTIONS.minWidth : 1;
+      const minH = maxH >= OPTIONS.minHeight ? OPTIONS.minHeight : 1;
+
+      const nextW = clamp(startW + (moveEvent.clientX - startX), minW, maxW);
+      const nextH = clamp(startH + (moveEvent.clientY - startY), minH, maxH);
 
       popout.style.width = `${Math.floor(nextW)}px`;
       popout.style.height = `${Math.floor(nextH)}px`;
@@ -606,6 +646,11 @@
     maxViewportFrac: 0.72,
     borderRadius: 14,
   };
+
+  const HOVER_VIEWPORT_PAD = 8;
+  const HOVER_WRAP_PADDING = 10; // keep in sync with hoverWrap styles
+  const HOVER_WRAP_BORDER = 1; // keep in sync with hoverWrap styles
+  const HOVER_WRAP_CHROME = HOVER_WRAP_PADDING * 2 + HOVER_WRAP_BORDER * 2;
 
   function loadHoverState() {
     try {
@@ -645,10 +690,10 @@
     "background:rgba(12,12,12,0.78)",
     "backdrop-filter: blur(6px)",
     "-webkit-backdrop-filter: blur(6px)",
-    "border:1px solid rgba(255,255,255,0.20)",
+    `border:${HOVER_WRAP_BORDER}px solid rgba(255,255,255,0.20)`,
     "box-shadow: 0 12px 36px rgba(0,0,0,0.35)",
     `border-radius:${HOVER_DEFAULTS.borderRadius}px`,
-    "padding:10px",
+    `padding:${HOVER_WRAP_PADDING}px`,
   ].join(";");
 
   const hoverImg = document.createElement("img");
@@ -762,36 +807,49 @@
   }
 
   function computeHoverFitSize(naturalW, naturalH) {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const maxW = vw * hoverState.maxViewportFrac;
-    const maxH = vh * hoverState.maxViewportFrac;
+    const { width: vw, height: vh } = getViewport();
+    const maxWrapW = Math.min(vw * hoverState.maxViewportFrac, vw - HOVER_VIEWPORT_PAD * 2);
+    const maxWrapH = Math.min(vh * hoverState.maxViewportFrac, vh - HOVER_VIEWPORT_PAD * 2);
+    const maxImgW = Math.max(1, Math.floor(maxWrapW - HOVER_WRAP_CHROME));
+    const maxImgH = Math.max(1, Math.floor(maxWrapH - HOVER_WRAP_CHROME));
+    const minImgW = Math.min(40, maxImgW);
+    const minImgH = Math.min(40, maxImgH);
 
-    const fitScale = Math.min(maxW / naturalW, maxH / naturalH, 1);
-    const finalScale = clamp(fitScale * hoverState.scale, 0.05, 10);
+    const safeW = Math.max(1, naturalW);
+    const safeH = Math.max(1, naturalH);
+
+    const maxAllowedScale = Math.min(maxImgW / safeW, maxImgH / safeH);
+    const baseFitScale = Math.min(maxAllowedScale, 1); // no upscaling by default
+    const maxMultiplier = baseFitScale ? maxAllowedScale / baseFitScale : 1;
+    const effectiveMultiplier = clamp(
+      hoverState.scale,
+      hoverState.minScale,
+      Math.min(hoverState.maxScale, maxMultiplier)
+    );
+    const finalScale = baseFitScale * effectiveMultiplier;
 
     return {
-      w: Math.max(40, Math.round(naturalW * finalScale)),
-      h: Math.max(40, Math.round(naturalH * finalScale)),
+      w: Math.max(minImgW, Math.floor(safeW * finalScale)),
+      h: Math.max(minImgH, Math.floor(safeH * finalScale)),
     };
   }
 
   function updateHoverPosition(x, y) {
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    const { width: vw, height: vh } = getViewport();
 
     const rect = hoverWrap.getBoundingClientRect();
     const w = rect.width || 300;
     const h = rect.height || 300;
+    const pad = HOVER_VIEWPORT_PAD;
 
     let left = x + hoverState.offset;
     let top = y + hoverState.offset;
 
-    if (left + w + 10 > vw) left = x - hoverState.offset - w;
-    if (top + h + 10 > vh) top = y - hoverState.offset - h;
+    if (left + w + pad > vw) left = x - hoverState.offset - w;
+    if (top + h + pad > vh) top = y - hoverState.offset - h;
 
-    left = clamp(left, 8, vw - w - 8);
-    top = clamp(top, 8, vh - h - 8);
+    left = clamp(left, pad, Math.max(pad, vw - w - pad));
+    top = clamp(top, pad, Math.max(pad, vh - h - pad));
 
     hoverWrap.style.left = `${left}px`;
     hoverWrap.style.top = `${top}px`;
@@ -982,6 +1040,13 @@
 
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("click", onAltClick, true);
+  window.addEventListener("resize", () => {
+    clampPopoutToViewport();
+    if (hoverWrap.style.display === "block") {
+      applyHoverSize();
+      updateHoverPosition(hoverActive.lastMouse.x, hoverActive.lastMouse.y);
+    }
+  });
 
   document.addEventListener("mouseover", onHoverMouseOver, true);
   document.addEventListener("mousemove", onHoverMouseMove, true);
