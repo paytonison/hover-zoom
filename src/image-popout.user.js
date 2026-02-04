@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      0.2.1
-// @description  Hover images for a near-cursor preview (wheel resizes; click pins; Z toggles; Esc hides). Alt/Option-click opens a movable, resizable overlay.
+// @version      0.2.2
+// @description  Hover images for a near-cursor preview (click pins; Z toggles; Esc hides). Alt/Option-click opens a movable, resizable overlay.
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
@@ -29,6 +29,7 @@
     titlebar: null,
     img: null,
     title: null,
+    popoutAutoFit: true,
     drag: null,
     resize: null,
     lastUrl: null,
@@ -425,40 +426,28 @@
     }
   }
 
-  function openPopout(url, clickX, clickY) {
+  function maximizePopoutToViewport() {
+    if (!STATE.popout) return;
+    const { width: vw, height: vh } = getViewport();
+    const padding = OPTIONS.viewportPadding;
+    const winW = Math.max(1, Math.floor(vw - padding * 2));
+    const winH = Math.max(1, Math.floor(vh - padding * 2));
+
+    STATE.popout.style.left = `${padding}px`;
+    STATE.popout.style.top = `${padding}px`;
+    STATE.popout.style.width = `${winW}px`;
+    STATE.popout.style.height = `${winH}px`;
+  }
+
+  function openPopout(url) {
     buildUi();
     if (!STATE.overlay || !STATE.popout || !STATE.img || !STATE.title) return;
 
     STATE.lastUrl = url;
     STATE.title.textContent = url;
+    STATE.popoutAutoFit = true;
 
-    // Show quickly with a reasonable default size; refine after the image loads.
-    const { width: vw, height: vh } = getViewport();
-    const padding = OPTIONS.viewportPadding;
-    const maxW0 = Math.max(1, Math.floor(vw - padding * 2));
-    const maxH0 = Math.max(1, Math.floor(vh - padding * 2));
-    const defaultMaxW = Math.min(Math.floor(vw * OPTIONS.maxViewportFraction), maxW0);
-    const defaultMaxH = Math.min(Math.floor(vh * OPTIONS.maxViewportFraction), maxH0);
-    const defaultMinW = defaultMaxW >= OPTIONS.minWidth ? OPTIONS.minWidth : 1;
-    const defaultMinH = defaultMaxH >= OPTIONS.minHeight ? OPTIONS.minHeight : 1;
-    const defaultW = clamp(520, defaultMinW, defaultMaxW);
-    const defaultH = clamp(420, defaultMinH, defaultMaxH);
-
-    const initialLeft = clamp(
-      Math.floor(clickX + padding),
-      padding,
-      Math.max(padding, vw - defaultW - padding)
-    );
-    const initialTop = clamp(
-      Math.floor(clickY + padding),
-      padding,
-      Math.max(padding, vh - defaultH - padding)
-    );
-
-    STATE.popout.style.left = `${initialLeft}px`;
-    STATE.popout.style.top = `${initialTop}px`;
-    STATE.popout.style.width = `${defaultW}px`;
-    STATE.popout.style.height = `${defaultH}px`;
+    maximizePopoutToViewport();
 
     STATE.overlay.classList.add("ip-open");
 
@@ -467,41 +456,7 @@
     img.src = "";
     img.src = url;
 
-    img.onload = () => {
-      // Fit the image into the viewport while keeping aspect ratio.
-      const { width: vw2, height: vh2 } = getViewport();
-      const titlebarHeight = 40;
-      const maxWAvail = Math.max(1, Math.floor(vw2 - padding * 2));
-      const maxHAvail = Math.max(1, Math.floor(vh2 - padding * 2));
-      const maxW = Math.min(Math.floor(vw2 * OPTIONS.maxViewportFraction), maxWAvail);
-      const maxWinH = Math.min(Math.floor(vh2 * OPTIONS.maxViewportFraction), maxHAvail);
-      const maxBodyH = Math.max(1, maxWinH - titlebarHeight);
-
-      const naturalW = img.naturalWidth || defaultW;
-      const naturalH = img.naturalHeight || (defaultH - titlebarHeight);
-      const scale = Math.min(maxW / naturalW, maxBodyH / naturalH, OPTIONS.maxScaleUp);
-
-      const winMinW = maxW >= OPTIONS.minWidth ? OPTIONS.minWidth : 1;
-      const winMinH = maxWinH >= OPTIONS.minHeight ? OPTIONS.minHeight : 1;
-
-      const winW = clamp(Math.floor(naturalW * scale), winMinW, maxW);
-      const winH = clamp(
-        Math.floor(naturalH * scale) + titlebarHeight,
-        winMinH,
-        maxWinH
-      );
-
-      // Keep the window anchored near where it was opened, but clamped to the viewport.
-      const currentLeft = Number.parseFloat(STATE.popout.style.left) || initialLeft;
-      const currentTop = Number.parseFloat(STATE.popout.style.top) || initialTop;
-      const left = clamp(currentLeft, padding, Math.max(padding, vw2 - winW - padding));
-      const top = clamp(currentTop, padding, Math.max(padding, vh2 - winH - padding));
-
-      STATE.popout.style.left = `${left}px`;
-      STATE.popout.style.top = `${top}px`;
-      STATE.popout.style.width = `${winW}px`;
-      STATE.popout.style.height = `${winH}px`;
-    };
+    img.onload = () => clampPopoutToViewport();
 
     img.onerror = () => showPopoutToast("Failed to load image");
   }
@@ -548,6 +503,7 @@
     if (!(titlebar instanceof Element)) return;
 
     event.preventDefault();
+    STATE.popoutAutoFit = false;
 
     if (!STATE.popout) return;
     const popout = STATE.popout;
@@ -593,6 +549,7 @@
     if (!(event instanceof PointerEvent)) return;
     if (event.button !== 0) return;
     event.preventDefault();
+    STATE.popoutAutoFit = false;
 
     if (!STATE.popout) return;
     const popout = STATE.popout;
@@ -638,12 +595,8 @@
   const HOVER_DEFAULTS = {
     enabled: true,
     pinned: false,
-    // scale factor of the preview relative to its "fit-to-viewport" size
-    scale: 1.0,
-    minScale: 0.45,
-    maxScale: 2.25,
     offset: 16,
-    maxViewportFrac: 0.72,
+    maxViewportFrac: 1.0,
     borderRadius: 14,
   };
 
@@ -671,7 +624,6 @@
         JSON.stringify({
           enabled: hoverState.enabled,
           pinned: hoverState.pinned,
-          scale: hoverState.scale,
         })
       );
     } catch {}
@@ -818,15 +770,7 @@
     const safeW = Math.max(1, naturalW);
     const safeH = Math.max(1, naturalH);
 
-    const maxAllowedScale = Math.min(maxImgW / safeW, maxImgH / safeH);
-    const baseFitScale = Math.min(maxAllowedScale, 1); // no upscaling by default
-    const maxMultiplier = baseFitScale ? maxAllowedScale / baseFitScale : 1;
-    const effectiveMultiplier = clamp(
-      hoverState.scale,
-      hoverState.minScale,
-      Math.min(hoverState.maxScale, maxMultiplier)
-    );
-    const finalScale = baseFitScale * effectiveMultiplier;
+    const finalScale = Math.min(maxImgW / safeW, maxImgH / safeH);
 
     return {
       w: Math.max(minImgW, Math.floor(safeW * finalScale)),
@@ -959,27 +903,6 @@
     showHoverToast(hoverState.pinned ? "Pinned preview" : "Unpinned");
   }
 
-  function onHoverWheel(event) {
-    if (!hoverState.enabled) return;
-    if (!hoverActive.el || hoverWrap.style.display !== "block") return;
-
-    event.preventDefault();
-
-    const delta = Math.sign(event.deltaY);
-    const step = event.shiftKey ? 0.1 : 0.06;
-    hoverState.scale = clamp(
-      hoverState.scale + delta * step,
-      hoverState.minScale,
-      hoverState.maxScale
-    );
-
-    saveHoverState();
-    applyHoverSize();
-    updateHoverPosition(hoverActive.lastMouse.x, hoverActive.lastMouse.y);
-
-    showHoverToast(`Preview: ${(hoverState.scale * 100).toFixed(0)}%`);
-  }
-
   // ----- Shared keyboard handling -----
   function onKeyDown(event) {
     if (!(event instanceof KeyboardEvent)) return;
@@ -1035,12 +958,15 @@
     event.stopPropagation();
 
     disableHoverPreviewForPopout();
-    openPopout(url, event.clientX, event.clientY);
+    openPopout(url);
   }
 
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("click", onAltClick, true);
   window.addEventListener("resize", () => {
+    if (STATE.overlay?.classList.contains("ip-open") && STATE.popout && STATE.popoutAutoFit) {
+      maximizePopoutToViewport();
+    }
     clampPopoutToViewport();
     if (hoverWrap.style.display === "block") {
       applyHoverSize();
@@ -1051,7 +977,6 @@
   document.addEventListener("mouseover", onHoverMouseOver, true);
   document.addEventListener("mousemove", onHoverMouseMove, true);
   document.addEventListener("click", onHoverClick, true);
-  document.addEventListener("wheel", onHoverWheel, { passive: false, capture: true });
 
   showHoverToast(
     hoverState.enabled ? "Image preview ready (Z toggles)" : "Image preview OFF (press Z)"
