@@ -382,7 +382,9 @@
         return;
       }
 
-      const action = target.closest("[data-action]")?.getAttribute("data-action");
+      const action = target
+        .closest("[data-action]")
+        ?.getAttribute("data-action");
       if (action === "close") closePopout();
       if (action === "open") openInNewTab();
       if (action === "copy") copyUrlToClipboard();
@@ -407,7 +409,10 @@
     toast.textContent = message;
     toast.classList.add("ip-show");
     window.clearTimeout(popoutToastTimer);
-    popoutToastTimer = window.setTimeout(() => toast.classList.remove("ip-show"), 1200);
+    popoutToastTimer = window.setTimeout(
+      () => toast.classList.remove("ip-show"),
+      1200,
+    );
   }
 
   function openInNewTab() {
@@ -522,12 +527,12 @@
       const nextLeft = clamp(
         startLeft + (moveEvent.clientX - startX),
         padding,
-        Math.max(padding, vw - rect.width - padding)
+        Math.max(padding, vw - rect.width - padding),
       );
       const nextTop = clamp(
         startTop + (moveEvent.clientY - startY),
         padding,
-        Math.max(padding, vh - rect.height - padding)
+        Math.max(padding, vh - rect.height - padding),
       );
 
       popout.style.left = `${nextLeft}px`;
@@ -624,7 +629,7 @@
         JSON.stringify({
           enabled: hoverState.enabled,
           pinned: hoverState.pinned,
-        })
+        }),
       );
     } catch {}
   }
@@ -760,8 +765,14 @@
 
   function computeHoverFitSize(naturalW, naturalH) {
     const { width: vw, height: vh } = getViewport();
-    const maxWrapW = Math.min(vw * hoverState.maxViewportFrac, vw - HOVER_VIEWPORT_PAD * 2);
-    const maxWrapH = Math.min(vh * hoverState.maxViewportFrac, vh - HOVER_VIEWPORT_PAD * 2);
+    const maxWrapW = Math.min(
+      vw * hoverState.maxViewportFrac,
+      vw - HOVER_VIEWPORT_PAD * 2,
+    );
+    const maxWrapH = Math.min(
+      vh * hoverState.maxViewportFrac,
+      vh - HOVER_VIEWPORT_PAD * 2,
+    );
     const maxImgW = Math.max(1, Math.floor(maxWrapW - HOVER_WRAP_CHROME));
     const maxImgH = Math.max(1, Math.floor(maxWrapH - HOVER_WRAP_CHROME));
     const minImgW = Math.min(40, maxImgW);
@@ -859,7 +870,8 @@
     const target = findHoverZoomableTarget(event.target);
     if (!target) return;
 
-    if (target !== hoverActive.el) activateHoverTarget(target, event.clientX, event.clientY);
+    if (target !== hoverActive.el)
+      activateHoverTarget(target, event.clientX, event.clientY);
   }
 
   function onHoverMouseMove(event) {
@@ -894,7 +906,11 @@
     if (!target) return;
 
     if (!hoverActive.el) {
-      activateHoverTarget(target, hoverActive.lastMouse.x, hoverActive.lastMouse.y);
+      activateHoverTarget(
+        target,
+        hoverActive.lastMouse.x,
+        hoverActive.lastMouse.y,
+      );
     }
 
     hoverState.pinned = !hoverState.pinned;
@@ -916,14 +932,21 @@
     }
 
     const tag = (event.target && event.target.tagName) || "";
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || event.target?.isContentEditable) {
+    if (
+      tag === "INPUT" ||
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      event.target?.isContentEditable
+    ) {
       return;
     }
 
     if (event.key === "z" || event.key === "Z") {
       hoverState.enabled = !hoverState.enabled;
       saveHoverState();
-      showHoverToast(hoverState.enabled ? "Image preview: ON" : "Image preview: OFF");
+      showHoverToast(
+        hoverState.enabled ? "Image preview: ON" : "Image preview: OFF",
+      );
       if (!hoverState.enabled) hideHoverWrap();
       return;
     }
@@ -939,7 +962,11 @@
         const rect = hoverActive.el.getBoundingClientRect();
         const x = hoverActive.lastMouse.x;
         const y = hoverActive.lastMouse.y;
-        const inside = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+        const inside =
+          x >= rect.left &&
+          x <= rect.right &&
+          y >= rect.top &&
+          y <= rect.bottom;
         if (!inside) hideHoverWrap();
       }
     }
@@ -964,7 +991,11 @@
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("click", onAltClick, true);
   window.addEventListener("resize", () => {
-    if (STATE.overlay?.classList.contains("ip-open") && STATE.popout && STATE.popoutAutoFit) {
+    if (
+      STATE.overlay?.classList.contains("ip-open") &&
+      STATE.popout &&
+      STATE.popoutAutoFit
+    ) {
       maximizePopoutToViewport();
     }
     clampPopoutToViewport();
@@ -979,6 +1010,8 @@
   document.addEventListener("click", onHoverClick, true);
 
   showHoverToast(
-    hoverState.enabled ? "Image preview ready (Z toggles)" : "Image preview OFF (press Z)"
+    hoverState.enabled
+      ? "Image preview ready (Z toggles)"
+      : "Image preview OFF (press Z)",
   );
 })();
