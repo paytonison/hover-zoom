@@ -197,23 +197,25 @@
     style.id = "ip-popout-style";
     style.textContent = `
       :root {
-        --ip-glass-blur: 20px;
-        --ip-glass-sat: 180%;
+        --ip-glass-blur: 12px;
+        --ip-glass-sat: 150%;
         --ip-glass-radius-xl: 16px;
         --ip-glass-radius-lg: 14px;
         --ip-glass-radius-md: 10px;
         --ip-glass-radius-sm: 8px;
         --ip-glass-text: rgba(26, 26, 28, 0.92);
         --ip-glass-text-muted: rgba(26, 26, 28, 0.65);
-        --ip-glass-surface: rgba(255, 255, 255, 0.72);
-        --ip-glass-surface-strong: rgba(255, 255, 255, 0.82);
-        --ip-glass-surface-soft: rgba(255, 255, 255, 0.58);
-        --ip-glass-border: rgba(255, 255, 255, 0.7);
-        --ip-glass-border-soft: rgba(0, 0, 0, 0.12);
+        --ip-glass-surface: rgba(255, 255, 255, 0.52);
+        --ip-glass-surface-strong: rgba(255, 255, 255, 0.64);
+        --ip-glass-surface-soft: rgba(255, 255, 255, 0.38);
+        --ip-glass-border: rgba(255, 255, 255, 0.55);
+        --ip-glass-border-soft: rgba(0, 0, 0, 0.1);
+        --ip-glass-border-hairline: rgba(0, 0, 0, 0.22);
         --ip-glass-shadow:
-          0 26px 60px rgba(18, 18, 20, 0.18),
-          0 4px 12px rgba(18, 18, 20, 0.12);
-        --ip-glass-highlight: rgba(255, 255, 255, 0.85);
+          0 26px 60px rgba(18, 18, 20, 0.16),
+          0 4px 12px rgba(18, 18, 20, 0.1);
+        --ip-glass-shadow-soft: 0 10px 28px rgba(18, 18, 20, 0.16);
+        --ip-glass-highlight: rgba(255, 255, 255, 0.8);
         --ip-glass-backdrop: rgba(10, 10, 12, 0.2);
         --ip-glass-image-backdrop: rgba(0, 0, 0, 0.08);
         --ip-glass-toast: rgba(255, 255, 255, 0.72);
@@ -223,15 +225,17 @@
         :root {
           --ip-glass-text: rgba(245, 245, 247, 0.92);
           --ip-glass-text-muted: rgba(245, 245, 247, 0.7);
-          --ip-glass-surface: rgba(30, 30, 34, 0.76);
-          --ip-glass-surface-strong: rgba(36, 36, 40, 0.86);
-          --ip-glass-surface-soft: rgba(26, 26, 30, 0.6);
-          --ip-glass-border: rgba(255, 255, 255, 0.18);
-          --ip-glass-border-soft: rgba(255, 255, 255, 0.08);
+          --ip-glass-surface: rgba(28, 28, 32, 0.6);
+          --ip-glass-surface-strong: rgba(34, 34, 38, 0.7);
+          --ip-glass-surface-soft: rgba(24, 24, 28, 0.44);
+          --ip-glass-border: rgba(255, 255, 255, 0.26);
+          --ip-glass-border-soft: rgba(255, 255, 255, 0.1);
+          --ip-glass-border-hairline: rgba(0, 0, 0, 0.55);
           --ip-glass-shadow:
-            0 28px 70px rgba(0, 0, 0, 0.45),
-            0 4px 12px rgba(0, 0, 0, 0.32);
-          --ip-glass-highlight: rgba(255, 255, 255, 0.18);
+            0 28px 70px rgba(0, 0, 0, 0.42),
+            0 4px 12px rgba(0, 0, 0, 0.28);
+          --ip-glass-shadow-soft: 0 12px 30px rgba(0, 0, 0, 0.48);
+          --ip-glass-highlight: rgba(255, 255, 255, 0.24);
           --ip-glass-backdrop: rgba(5, 5, 7, 0.38);
           --ip-glass-image-backdrop: rgba(0, 0, 0, 0.35);
           --ip-glass-toast: rgba(32, 32, 36, 0.8);
@@ -259,6 +263,8 @@
         color: var(--ip-glass-text);
         border-radius: var(--ip-glass-radius-xl);
         box-shadow: var(--ip-glass-shadow),
+          var(--ip-glass-shadow-soft),
+          0 0 0 0.5px var(--ip-glass-border-hairline),
           inset 0 1px 0 var(--ip-glass-highlight);
         overflow: hidden;
         border: 1px solid var(--ip-glass-border);
