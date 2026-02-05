@@ -796,7 +796,7 @@
     "border: 1px solid var(--ip-glass-border)",
     "backdrop-filter: blur(12px) saturate(160%)",
     "-webkit-backdrop-filter: blur(12px) saturate(160%)",
-    "box-shadow: 0 6px 16px rgba(0,0,0,0.18)",
+    "box-shadow: var(--ip-glass-shadow-soft)",
     "letter-spacing: 0.04em",
     "display:none",
   ].join(";");
