@@ -297,8 +297,8 @@
         inset: 0;
         background: linear-gradient(
           180deg,
-          rgba(255, 255, 255, 0.42),
-          rgba(255, 255, 255, 0)
+          var(--ip-glass-highlight),
+          transparent
         );
         opacity: 0.5;
         pointer-events: none;
