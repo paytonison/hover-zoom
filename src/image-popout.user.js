@@ -196,75 +196,170 @@
     const style = document.createElement("style");
     style.id = "ip-popout-style";
     style.textContent = `
+      :root {
+        --ip-glass-blur: 20px;
+        --ip-glass-sat: 180%;
+        --ip-glass-radius-xl: 16px;
+        --ip-glass-radius-lg: 14px;
+        --ip-glass-radius-md: 10px;
+        --ip-glass-radius-sm: 8px;
+        --ip-glass-text: rgba(26, 26, 28, 0.92);
+        --ip-glass-text-muted: rgba(26, 26, 28, 0.65);
+        --ip-glass-surface: rgba(255, 255, 255, 0.72);
+        --ip-glass-surface-strong: rgba(255, 255, 255, 0.82);
+        --ip-glass-surface-soft: rgba(255, 255, 255, 0.58);
+        --ip-glass-border: rgba(255, 255, 255, 0.7);
+        --ip-glass-border-soft: rgba(0, 0, 0, 0.12);
+        --ip-glass-shadow:
+          0 26px 60px rgba(18, 18, 20, 0.18),
+          0 4px 12px rgba(18, 18, 20, 0.12);
+        --ip-glass-highlight: rgba(255, 255, 255, 0.85);
+        --ip-glass-backdrop: rgba(10, 10, 12, 0.2);
+        --ip-glass-image-backdrop: rgba(0, 0, 0, 0.08);
+        --ip-glass-toast: rgba(255, 255, 255, 0.72);
+        --ip-glass-accent: rgba(0, 122, 255, 0.85);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --ip-glass-text: rgba(245, 245, 247, 0.92);
+          --ip-glass-text-muted: rgba(245, 245, 247, 0.7);
+          --ip-glass-surface: rgba(30, 30, 34, 0.76);
+          --ip-glass-surface-strong: rgba(36, 36, 40, 0.86);
+          --ip-glass-surface-soft: rgba(26, 26, 30, 0.6);
+          --ip-glass-border: rgba(255, 255, 255, 0.18);
+          --ip-glass-border-soft: rgba(255, 255, 255, 0.08);
+          --ip-glass-shadow:
+            0 28px 70px rgba(0, 0, 0, 0.45),
+            0 4px 12px rgba(0, 0, 0, 0.32);
+          --ip-glass-highlight: rgba(255, 255, 255, 0.18);
+          --ip-glass-backdrop: rgba(5, 5, 7, 0.38);
+          --ip-glass-image-backdrop: rgba(0, 0, 0, 0.35);
+          --ip-glass-toast: rgba(32, 32, 36, 0.8);
+          --ip-glass-accent: rgba(10, 132, 255, 0.9);
+        }
+      }
       #ip-popout-overlay {
         position: fixed;
         inset: 0;
         z-index: 2147483647;
         display: none;
+        color-scheme: light dark;
       }
       #ip-popout-overlay.ip-open { display: block; }
       #ip-popout-backdrop {
         position: absolute;
         inset: 0;
-        background: rgba(0,0,0,0.18);
-        backdrop-filter: saturate(120%) blur(1px);
+        background: var(--ip-glass-backdrop);
+        backdrop-filter: blur(18px) saturate(160%);
+        -webkit-backdrop-filter: blur(18px) saturate(160%);
       }
       #ip-popout-window {
         position: absolute;
-        background: #111;
-        color: #fff;
-        border-radius: 10px;
-        box-shadow: 0 14px 40px rgba(0,0,0,0.45);
+        background: var(--ip-glass-surface);
+        color: var(--ip-glass-text);
+        border-radius: var(--ip-glass-radius-xl);
+        box-shadow: var(--ip-glass-shadow),
+          inset 0 1px 0 var(--ip-glass-highlight);
         overflow: hidden;
-        border: 1px solid rgba(255,255,255,0.12);
+        border: 1px solid var(--ip-glass-border);
+        backdrop-filter: blur(var(--ip-glass-blur))
+          saturate(var(--ip-glass-sat));
+        -webkit-backdrop-filter: blur(var(--ip-glass-blur))
+          saturate(var(--ip-glass-sat));
       }
       #ip-popout-titlebar {
-        height: 40px;
+        height: 44px;
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 0 10px;
-        background: linear-gradient(to bottom, rgba(255,255,255,0.08), rgba(255,255,255,0.03));
+        gap: 8px;
+        padding: 0 12px;
+        background: linear-gradient(
+          180deg,
+          var(--ip-glass-surface-strong),
+          var(--ip-glass-surface)
+        );
+        border-bottom: 1px solid var(--ip-glass-border-soft);
         user-select: none;
         cursor: move;
+        position: relative;
+        backdrop-filter: blur(14px) saturate(170%);
+        -webkit-backdrop-filter: blur(14px) saturate(170%);
+      }
+      #ip-popout-titlebar::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.42),
+          rgba(255, 255, 255, 0)
+        );
+        opacity: 0.5;
+        pointer-events: none;
+      }
+      #ip-popout-titlebar > * {
+        position: relative;
+        z-index: 1;
       }
       #ip-popout-title {
         flex: 1;
         font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        opacity: 0.9;
+        color: var(--ip-glass-text);
+        letter-spacing: 0.01em;
+        opacity: 0.92;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
       }
       .ip-btn {
         appearance: none;
-        border: 1px solid rgba(255,255,255,0.18);
-        background: rgba(0,0,0,0.2);
-        color: #fff;
-        border-radius: 8px;
-        padding: 6px 8px;
+        border: 1px solid var(--ip-glass-border);
+        background: var(--ip-glass-surface-soft);
+        color: var(--ip-glass-text);
+        border-radius: var(--ip-glass-radius-sm);
+        padding: 6px 10px;
         font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         cursor: pointer;
+        backdrop-filter: blur(10px) saturate(160%);
+        -webkit-backdrop-filter: blur(10px) saturate(160%);
+        box-shadow: inset 0 1px 0 var(--ip-glass-highlight),
+          0 1px 2px rgba(0, 0, 0, 0.12);
+        transition: background 120ms ease,
+          box-shadow 120ms ease,
+          transform 80ms ease;
       }
-      .ip-btn:hover { background: rgba(255,255,255,0.08); }
-      .ip-btn:active { transform: translateY(1px); }
+      .ip-btn:hover { background: var(--ip-glass-surface-strong); }
+      .ip-btn:active {
+        transform: translateY(1px) scale(0.98);
+        box-shadow: inset 0 1px 0 var(--ip-glass-highlight);
+      }
+      .ip-btn:focus-visible {
+        outline: 2px solid var(--ip-glass-accent);
+        outline-offset: 1px;
+      }
       #ip-popout-close {
-        width: 32px;
+        width: 28px;
+        height: 28px;
         text-align: center;
-        padding: 6px 0;
+        padding: 0;
         font-weight: 600;
+        border-radius: 999px;
+      }
+      #ip-popout-close:hover {
+        background: rgba(255, 59, 48, 0.22);
+        border-color: rgba(255, 59, 48, 0.35);
       }
       #ip-popout-body {
         width: 100%;
-        height: calc(100% - 40px);
-        background: #000;
+        height: calc(100% - 44px);
+        background: var(--ip-glass-image-backdrop);
       }
       #ip-popout-img {
         width: 100%;
         height: 100%;
         display: block;
         object-fit: contain;
-        background: #000;
+        background: var(--ip-glass-image-backdrop);
       }
       #ip-popout-resize {
         position: absolute;
@@ -274,24 +369,40 @@
         height: 18px;
         cursor: nwse-resize;
         background:
-          linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.35) 50%),
-          linear-gradient(135deg, transparent 65%, rgba(255,255,255,0.22) 65%),
-          linear-gradient(135deg, transparent 80%, rgba(255,255,255,0.16) 80%);
+          linear-gradient(
+            135deg,
+            transparent 52%,
+            rgba(255, 255, 255, 0.45) 52%
+          ),
+          linear-gradient(
+            135deg,
+            transparent 68%,
+            rgba(255, 255, 255, 0.28) 68%
+          ),
+          linear-gradient(
+            135deg,
+            transparent 82%,
+            rgba(255, 255, 255, 0.18) 82%
+          );
         background-size: 18px 18px;
         background-repeat: no-repeat;
-        opacity: 0.65;
+        opacity: 0.55;
+        filter: drop-shadow(0 1px 0 var(--ip-glass-highlight));
       }
       #ip-popout-toast {
         position: absolute;
         left: 50%;
         bottom: 18px;
         transform: translateX(-50%);
-        background: rgba(0,0,0,0.75);
-        color: #fff;
-        border: 1px solid rgba(255,255,255,0.15);
+        background: var(--ip-glass-toast);
+        color: var(--ip-glass-text);
+        border: 1px solid var(--ip-glass-border);
         border-radius: 999px;
         padding: 8px 12px;
         font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        box-shadow: var(--ip-glass-shadow);
+        backdrop-filter: blur(16px) saturate(160%);
+        -webkit-backdrop-filter: blur(16px) saturate(160%);
         opacity: 0;
         transition: opacity 140ms ease;
         pointer-events: none;
@@ -644,11 +755,11 @@
     "z-index:2147483646",
     "display:none",
     "pointer-events:none",
-    "background:rgba(12,12,12,0.78)",
-    "backdrop-filter: blur(6px)",
-    "-webkit-backdrop-filter: blur(6px)",
-    `border:${HOVER_WRAP_BORDER}px solid rgba(255,255,255,0.20)`,
-    "box-shadow: 0 12px 36px rgba(0,0,0,0.35)",
+    "background: var(--ip-glass-surface-soft)",
+    "backdrop-filter: blur(18px) saturate(160%)",
+    "-webkit-backdrop-filter: blur(18px) saturate(160%)",
+    `border:${HOVER_WRAP_BORDER}px solid var(--ip-glass-border)`,
+    "box-shadow: var(--ip-glass-shadow)",
     `border-radius:${HOVER_DEFAULTS.borderRadius}px`,
     `padding:${HOVER_WRAP_PADDING}px`,
   ].join(";");
@@ -662,7 +773,8 @@
     "max-width: none",
     "max-height: none",
     `border-radius:${HOVER_DEFAULTS.borderRadius - 6}px`,
-    "background: rgba(0,0,0,0.25)",
+    "background: var(--ip-glass-image-backdrop)",
+    "box-shadow: inset 0 0 0 1px var(--ip-glass-border-soft)",
   ].join(";");
 
   const hoverBadge = document.createElement("div");
@@ -673,9 +785,13 @@
     "padding:4px 7px",
     "border-radius:999px",
     "font: 12px -apple-system, BlinkMacSystemFont, sans-serif",
-    "color: rgba(255,255,255,0.90)",
-    "background: rgba(0,0,0,0.35)",
-    "border: 1px solid rgba(255,255,255,0.15)",
+    "color: var(--ip-glass-text)",
+    "background: var(--ip-glass-surface-strong)",
+    "border: 1px solid var(--ip-glass-border)",
+    "backdrop-filter: blur(12px) saturate(160%)",
+    "-webkit-backdrop-filter: blur(12px) saturate(160%)",
+    "box-shadow: 0 6px 16px rgba(0,0,0,0.18)",
+    "letter-spacing: 0.04em",
     "display:none",
   ].join(";");
   hoverBadge.textContent = "PINNED";
@@ -692,14 +808,14 @@
     "bottom: 14px",
     "z-index: 2147483646",
     "padding: 8px 10px",
-    "border-radius: 10px",
-    "background: rgba(15,15,15,0.80)",
-    "color: rgba(255,255,255,0.92)",
+    "border-radius: 12px",
+    "background: var(--ip-glass-toast)",
+    "color: var(--ip-glass-text)",
     "font: 12px -apple-system, BlinkMacSystemFont, sans-serif",
-    "box-shadow: 0 10px 28px rgba(0,0,0,0.30)",
-    "border: 1px solid rgba(255,255,255,0.20)",
-    "backdrop-filter: blur(6px)",
-    "-webkit-backdrop-filter: blur(6px)",
+    "box-shadow: var(--ip-glass-shadow)",
+    "border: 1px solid var(--ip-glass-border)",
+    "backdrop-filter: blur(16px) saturate(160%)",
+    "-webkit-backdrop-filter: blur(16px) saturate(160%)",
     "opacity: 0",
     "transform: translateY(6px)",
     "transition: opacity 140ms ease, transform 140ms ease",
