@@ -378,17 +378,17 @@
           linear-gradient(
             135deg,
             transparent 52%,
-            rgba(255, 255, 255, 0.45) 52%
+            color-mix(in srgb, transparent 55%, var(--ip-glass-highlight)) 52%
           ),
           linear-gradient(
             135deg,
             transparent 68%,
-            rgba(255, 255, 255, 0.28) 68%
+            color-mix(in srgb, transparent 72%, var(--ip-glass-highlight)) 68%
           ),
           linear-gradient(
             135deg,
             transparent 82%,
-            rgba(255, 255, 255, 0.18) 82%
+            color-mix(in srgb, transparent 82%, var(--ip-glass-highlight)) 82%
           );
         background-size: 18px 18px;
         background-repeat: no-repeat;
