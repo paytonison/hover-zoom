@@ -352,8 +352,8 @@
         border-radius: 999px;
       }
       #ip-popout-close:hover {
-        background: rgba(255, 59, 48, 0.22);
-        border-color: rgba(255, 59, 48, 0.35);
+        background: var(--ip-glass-danger, rgba(255, 59, 48, 0.22));
+        border-color: var(--ip-glass-danger-border, rgba(255, 59, 48, 0.35));
       }
       #ip-popout-body {
         width: 100%;
