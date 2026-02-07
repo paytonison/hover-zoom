@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      0.2.2
+// @version      0.2.3
 // @description  Hover images for a near-cursor preview (click pins; Z toggles; Esc hides). Alt/Option-click opens a movable, resizable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -58,12 +58,36 @@
     }
   }
 
+
+  function normalizeKnownImageUrl(url) {
+    if (!url) return url;
+    if (url.startsWith("data:image/")) return url;
+    try {
+      const parsed = new URL(url, window.location.href);
+      const host = parsed.hostname.toLowerCase();
+
+      // X / Twitter CDN: prefer original-size assets when possible.
+      if (host.endsWith("twimg.com")) {
+        if (parsed.searchParams.has("format")) {
+          parsed.searchParams.set("name", "orig");
+        } else if (parsed.searchParams.has("name")) {
+          parsed.searchParams.set("name", "orig");
+        }
+        return parsed.href;
+      }
+
+      return parsed.href;
+    } catch {
+      return url;
+    }
+  }
+
   function resolveUrl(url) {
     if (!url) return "";
     try {
-      return new URL(url, window.location.href).href;
+      return normalizeKnownImageUrl(new URL(url, window.location.href).href);
     } catch {
-      return url;
+      return normalizeKnownImageUrl(url);
     }
   }
 
@@ -209,6 +233,8 @@
         --ip-glass-surface-strong: rgba(255, 255, 255, 0.64);
         --ip-glass-surface-soft: rgba(255, 255, 255, 0.38);
         --ip-glass-border: rgba(255, 255, 255, 0.55);
+        --ip-glass-border-outer: rgba(255, 255, 255, 0.33);
+        --ip-glass-border-outer-soft: rgba(255, 255, 255, 0.2);
         --ip-glass-border-soft: rgba(0, 0, 0, 0.1);
         --ip-glass-border-hairline: rgba(0, 0, 0, 0.22);
         --ip-glass-shadow:
@@ -229,6 +255,8 @@
           --ip-glass-surface-strong: rgba(34, 34, 38, 0.7);
           --ip-glass-surface-soft: rgba(24, 24, 28, 0.44);
           --ip-glass-border: rgba(255, 255, 255, 0.26);
+          --ip-glass-border-outer: rgba(255, 255, 255, 0.33);
+          --ip-glass-border-outer-soft: rgba(255, 255, 255, 0.22);
           --ip-glass-border-soft: rgba(255, 255, 255, 0.1);
           --ip-glass-border-hairline: rgba(0, 0, 0, 0.55);
           --ip-glass-shadow:
@@ -259,6 +287,7 @@
       }
       #ip-popout-window {
         position: absolute;
+        isolation: isolate;
         background: var(--ip-glass-surface);
         color: var(--ip-glass-text);
         border-radius: var(--ip-glass-radius-xl);
@@ -267,11 +296,47 @@
           0 0 0 0.5px var(--ip-glass-border-hairline),
           inset 0 1px 0 var(--ip-glass-highlight);
         overflow: hidden;
-        border: 1px solid var(--ip-glass-border);
+        border: 1px solid transparent;
         backdrop-filter: blur(var(--ip-glass-blur))
           saturate(var(--ip-glass-sat));
         -webkit-backdrop-filter: blur(var(--ip-glass-blur))
           saturate(var(--ip-glass-sat));
+      }
+      #ip-popout-window::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        padding: 1px;
+        background:
+          radial-gradient(
+            120% 78% at 10% -12%,
+            color-mix(in srgb, var(--ip-glass-highlight) 70%, transparent),
+            transparent 46%
+          ),
+          radial-gradient(
+            118% 80% at 92% 114%,
+            color-mix(in srgb, var(--ip-glass-border-outer-soft) 85%, transparent),
+            transparent 52%
+          ),
+          linear-gradient(
+            155deg,
+            color-mix(in srgb, var(--ip-glass-highlight) 48%, var(--ip-glass-border-outer)),
+            var(--ip-glass-border-outer) 45%,
+            var(--ip-glass-border-outer-soft)
+          );
+        -webkit-mask:
+          linear-gradient(#000 0 0) content-box,
+          linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor;
+        mask:
+          linear-gradient(#000 0 0) content-box,
+          linear-gradient(#000 0 0);
+        mask-composite: exclude;
+        box-shadow:
+          inset 0 1px 0 color-mix(in srgb, var(--ip-glass-highlight) 68%, transparent),
+          inset 0 -1px 0 color-mix(in srgb, var(--ip-glass-border-outer-soft) 88%, transparent);
+        pointer-events: none;
       }
       #ip-popout-titlebar {
         height: 44px;
@@ -624,8 +689,16 @@
     const titlebar = event.currentTarget;
     if (!(titlebar instanceof Element)) return;
 
+    const downTarget = event.target;
+    if (downTarget instanceof Element && downTarget.closest(".ip-btn")) return;
+
     event.preventDefault();
     STATE.popoutAutoFit = false;
+
+    const pointerId = event.pointerId;
+    try {
+      titlebar.setPointerCapture(pointerId);
+    } catch {}
 
     if (!STATE.popout) return;
     const popout = STATE.popout;
@@ -657,6 +730,9 @@
     };
 
     const onUp = () => {
+      try {
+        titlebar.releasePointerCapture(pointerId);
+      } catch {}
       window.removeEventListener("pointermove", onMove, true);
       window.removeEventListener("pointerup", onUp, true);
       document.documentElement.style.userSelect = "";
@@ -672,6 +748,14 @@
     if (event.button !== 0) return;
     event.preventDefault();
     STATE.popoutAutoFit = false;
+
+    const handle = event.currentTarget;
+    const pointerId = event.pointerId;
+    if (handle instanceof Element) {
+      try {
+        handle.setPointerCapture(pointerId);
+      } catch {}
+    }
 
     if (!STATE.popout) return;
     const popout = STATE.popout;
@@ -702,6 +786,11 @@
     };
 
     const onUp = () => {
+      if (handle instanceof Element) {
+        try {
+          handle.releasePointerCapture(pointerId);
+        } catch {}
+      }
       window.removeEventListener("pointermove", onMove, true);
       window.removeEventListener("pointerup", onUp, true);
       document.documentElement.style.userSelect = "";
@@ -848,12 +937,46 @@
     natural: { w: 0, h: 0 },
   };
 
+  let hoverMoveRaf = 0;
+  function scheduleHoverMove() {
+    if (hoverMoveRaf) return;
+    hoverMoveRaf = window.requestAnimationFrame(() => {
+      hoverMoveRaf = 0;
+
+      if (!hoverState.enabled) return;
+      if (!hoverActive.el) return;
+
+      if (!hoverState.pinned) {
+        const rect = hoverActive.el.getBoundingClientRect();
+        const x = hoverActive.lastMouse.x;
+        const y = hoverActive.lastMouse.y;
+        const inside =
+          x >= rect.left &&
+          x <= rect.right &&
+          y >= rect.top &&
+          y <= rect.bottom;
+
+        if (!inside) {
+          hideHoverWrap();
+          return;
+        }
+      }
+
+      updateHoverPosition(hoverActive.lastMouse.x, hoverActive.lastMouse.y);
+    });
+  }
+
+
   function showHoverWrap() {
     hoverWrap.style.display = "block";
     hoverBadge.style.display = hoverState.pinned ? "block" : "none";
   }
 
   function hideHoverWrap() {
+    if (hoverMoveRaf) {
+      window.cancelAnimationFrame(hoverMoveRaf);
+      hoverMoveRaf = 0;
+    }
     hoverWrap.style.display = "none";
     hoverWrap.style.left = "-9999px";
     hoverWrap.style.top = "-9999px";
@@ -1003,21 +1126,7 @@
     if (!hoverState.enabled) return;
     if (!hoverActive.el) return;
 
-    if (!hoverState.pinned) {
-      const rect = hoverActive.el.getBoundingClientRect();
-      const inside =
-        event.clientX >= rect.left &&
-        event.clientX <= rect.right &&
-        event.clientY >= rect.top &&
-        event.clientY <= rect.bottom;
-
-      if (!inside) {
-        hideHoverWrap();
-        return;
-      }
-    }
-
-    updateHoverPosition(event.clientX, event.clientY);
+    scheduleHoverMove();
   }
 
   function onHoverClick(event) {
