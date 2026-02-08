@@ -814,6 +814,7 @@
   const HOVER_WRAP_PADDING = 10; // keep in sync with hoverWrap styles
   const HOVER_WRAP_BORDER = 1; // keep in sync with hoverWrap styles
   const HOVER_WRAP_CHROME = HOVER_WRAP_PADDING * 2 + HOVER_WRAP_BORDER * 2;
+  const HOVER_FOLLOW_IDLE_MS = 120;
 
   function loadHoverState() {
     try {
@@ -843,8 +844,10 @@
   hoverWrap.id = "ip-hover-wrap";
   hoverWrap.style.cssText = [
     "position:fixed",
-    "left:-9999px",
-    "top:-9999px",
+    "left:0",
+    "top:0",
+    "transform: translate3d(-9999px, -9999px, 0)",
+    "will-change: transform",
     // Keep below the modal overlay.
     "z-index:2147483646",
     "display:none",
@@ -935,34 +938,68 @@
     lastMouse: { x: 0, y: 0 },
     natural: { w: 0, h: 0 },
   };
+  const hoverLayout = {
+    wrapW: 300,
+    wrapH: 300,
+    lastMoveAt: 0,
+    lastFrameMouseX: Number.NaN,
+    lastFrameMouseY: Number.NaN,
+  };
 
   let hoverMoveRaf = 0;
-  function scheduleHoverMove() {
+  function stopHoverFollowLoop() {
+    if (!hoverMoveRaf) return;
+    window.cancelAnimationFrame(hoverMoveRaf);
+    hoverMoveRaf = 0;
+  }
+
+  function runHoverFollowLoop() {
+    hoverMoveRaf = 0;
+
+    if (!hoverState.enabled) return;
+    if (!hoverActive.el) return;
+    if (hoverState.pinned) return;
+    if (hoverWrap.style.display !== "block") return;
+
+    const now = performance.now();
+    if (now - hoverLayout.lastMoveAt > HOVER_FOLLOW_IDLE_MS) return;
+
+    const x = hoverActive.lastMouse.x;
+    const y = hoverActive.lastMouse.y;
+    const moved =
+      x !== hoverLayout.lastFrameMouseX || y !== hoverLayout.lastFrameMouseY;
+
+    if (!moved) {
+      hoverMoveRaf = window.requestAnimationFrame(runHoverFollowLoop);
+      return;
+    }
+
+    const rect = hoverActive.el.getBoundingClientRect();
+
+    const inside =
+      x >= rect.left &&
+      x <= rect.right &&
+      y >= rect.top &&
+      y <= rect.bottom;
+
+    if (!inside) {
+      hideHoverWrap();
+      return;
+    }
+
+    updateHoverPosition(x, y);
+    hoverLayout.lastFrameMouseX = x;
+    hoverLayout.lastFrameMouseY = y;
+    hoverMoveRaf = window.requestAnimationFrame(runHoverFollowLoop);
+  }
+
+  function startHoverFollowLoop() {
     if (hoverMoveRaf) return;
-    hoverMoveRaf = window.requestAnimationFrame(() => {
-      hoverMoveRaf = 0;
-
-      if (!hoverState.enabled) return;
-      if (!hoverActive.el) return;
-
-      if (!hoverState.pinned) {
-        const rect = hoverActive.el.getBoundingClientRect();
-        const x = hoverActive.lastMouse.x;
-        const y = hoverActive.lastMouse.y;
-        const inside =
-          x >= rect.left &&
-          x <= rect.right &&
-          y >= rect.top &&
-          y <= rect.bottom;
-
-        if (!inside) {
-          hideHoverWrap();
-          return;
-        }
-      }
-
-      updateHoverPosition(hoverActive.lastMouse.x, hoverActive.lastMouse.y);
-    });
+    if (!hoverState.enabled) return;
+    if (!hoverActive.el) return;
+    if (hoverState.pinned) return;
+    if (hoverWrap.style.display !== "block") return;
+    hoverMoveRaf = window.requestAnimationFrame(runHoverFollowLoop);
   }
 
   function showHoverWrap() {
@@ -971,15 +1008,13 @@
   }
 
   function hideHoverWrap() {
-    if (hoverMoveRaf) {
-      window.cancelAnimationFrame(hoverMoveRaf);
-      hoverMoveRaf = 0;
-    }
+    stopHoverFollowLoop();
     hoverWrap.style.display = "none";
-    hoverWrap.style.left = "-9999px";
-    hoverWrap.style.top = "-9999px";
+    hoverWrap.style.transform = "translate3d(-9999px, -9999px, 0)";
     hoverActive.el = null;
     hoverActive.url = "";
+    hoverLayout.lastFrameMouseX = Number.NaN;
+    hoverLayout.lastFrameMouseY = Number.NaN;
   }
 
   function hoverTargetIsTooSmall(el) {
@@ -1035,9 +1070,8 @@
   function updateHoverPosition(x, y) {
     const { width: vw, height: vh } = getViewport();
 
-    const rect = hoverWrap.getBoundingClientRect();
-    const w = rect.width || 300;
-    const h = rect.height || 300;
+    const w = hoverLayout.wrapW;
+    const h = hoverLayout.wrapH;
     const pad = HOVER_VIEWPORT_PAD;
 
     let left = x + hoverState.offset;
@@ -1049,8 +1083,7 @@
     left = clamp(left, pad, Math.max(pad, vw - w - pad));
     top = clamp(top, pad, Math.max(pad, vh - h - pad));
 
-    hoverWrap.style.left = `${left}px`;
-    hoverWrap.style.top = `${top}px`;
+    hoverWrap.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
   }
 
   function applyHoverSize() {
@@ -1059,6 +1092,8 @@
     const { w, h } = computeHoverFitSize(naturalW, naturalH);
     hoverImg.style.width = `${w}px`;
     hoverImg.style.height = `${h}px`;
+    hoverLayout.wrapW = w + HOVER_WRAP_CHROME;
+    hoverLayout.wrapH = h + HOVER_WRAP_CHROME;
   }
 
   function setHoverImageUrl(url) {
@@ -1093,10 +1128,16 @@
 
     hoverActive.el = el;
     hoverActive.url = url;
+    hoverActive.lastMouse.x = mouseX;
+    hoverActive.lastMouse.y = mouseY;
+    hoverLayout.lastMoveAt = performance.now();
+    hoverLayout.lastFrameMouseX = Number.NaN;
+    hoverLayout.lastFrameMouseY = Number.NaN;
 
     showHoverWrap();
     setHoverImageUrl(url);
     updateHoverPosition(mouseX, mouseY);
+    startHoverFollowLoop();
   }
 
   function disableHoverPreviewForPopout() {
@@ -1120,11 +1161,12 @@
   function onHoverMouseMove(event) {
     hoverActive.lastMouse.x = event.clientX;
     hoverActive.lastMouse.y = event.clientY;
+    hoverLayout.lastMoveAt = performance.now();
 
     if (!hoverState.enabled) return;
     if (!hoverActive.el) return;
 
-    scheduleHoverMove();
+    startHoverFollowLoop();
   }
 
   function onHoverClick(event) {
@@ -1145,6 +1187,8 @@
     hoverState.pinned = !hoverState.pinned;
     saveHoverState();
     hoverBadge.style.display = hoverState.pinned ? "block" : "none";
+    if (hoverState.pinned) stopHoverFollowLoop();
+    else startHoverFollowLoop();
     showHoverToast(hoverState.pinned ? "Pinned preview" : "Unpinned");
   }
 
@@ -1185,6 +1229,8 @@
       hoverState.pinned = !hoverState.pinned;
       saveHoverState();
       hoverBadge.style.display = hoverState.pinned ? "block" : "none";
+      if (hoverState.pinned) stopHoverFollowLoop();
+      else startHoverFollowLoop();
       showHoverToast(hoverState.pinned ? "Pinned preview" : "Unpinned");
 
       if (!hoverState.pinned && hoverActive.el) {
@@ -1235,7 +1281,17 @@
   });
 
   document.addEventListener("mouseover", onHoverMouseOver, true);
-  document.addEventListener("mousemove", onHoverMouseMove, true);
+  if ("PointerEvent" in window) {
+    document.addEventListener("pointermove", onHoverMouseMove, {
+      capture: true,
+      passive: true,
+    });
+  } else {
+    document.addEventListener("mousemove", onHoverMouseMove, {
+      capture: true,
+      passive: true,
+    });
+  }
   document.addEventListener("click", onHoverClick, true);
 
   showHoverToast(
