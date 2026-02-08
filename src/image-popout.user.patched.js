@@ -58,7 +58,6 @@
     }
   }
 
-
   function normalizeKnownImageUrl(url) {
     if (!url) return url;
     if (url.startsWith("data:image/")) return url;
@@ -965,7 +964,6 @@
       updateHoverPosition(hoverActive.lastMouse.x, hoverActive.lastMouse.y);
     });
   }
-
 
   function showHoverWrap() {
     hoverWrap.style.display = "block";
