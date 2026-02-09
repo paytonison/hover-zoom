@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      0.2.3
+// @version      0.2.4
 // @description  Hover images for a near-cursor preview (click pins; Z toggles; Esc hides). Alt/Option-click opens a movable, resizable overlay.
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_download
+// @grant        GM_xmlhttpRequest
+// @connect      *
 // ==/UserScript==
 
 (() => {
@@ -28,11 +30,13 @@
     popout: null,
     titlebar: null,
     img: null,
+    video: null,
     title: null,
     popoutAutoFit: true,
     drag: null,
     resize: null,
     lastUrl: null,
+    lastMediaType: "image",
   };
 
   const LAZY_IMAGE_ATTRS = [
@@ -53,6 +57,18 @@
       const parsed = new URL(url, window.location.href);
       const path = parsed.pathname.toLowerCase();
       return /\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)$/.test(path);
+    } catch {
+      return false;
+    }
+  }
+
+  function isLikelyVideoUrl(url) {
+    if (!url) return false;
+    if (url.startsWith("data:video/")) return true;
+    try {
+      const parsed = new URL(url, window.location.href);
+      const path = parsed.pathname.toLowerCase();
+      return /\.(m4v|mp4|mov|webm|ogv|m3u8)(?:$|\?)/.test(path);
     } catch {
       return false;
     }
@@ -159,6 +175,66 @@
     return imgEl.src || null;
   }
 
+  function pickBestImageDownloadUrl(imgEl) {
+    const srcset = imgEl.getAttribute("srcset") || imgEl.srcset || "";
+    const bestSrcset = pickBestSrcsetUrl(srcset);
+    if (bestSrcset) return bestSrcset;
+
+    if (imgEl.currentSrc) return resolveUrl(imgEl.currentSrc);
+
+    for (const key of LAZY_IMAGE_ATTRS) {
+      const value = imgEl.getAttribute(key);
+      if (value) return resolveUrl(value);
+    }
+
+    return imgEl.src ? resolveUrl(imgEl.src) : "";
+  }
+
+  function extractQualityScore(value) {
+    if (!value) return 0;
+    const text = String(value).toLowerCase();
+    const match = text.match(/(\d{3,4})\s*p?/);
+    if (!match) return 0;
+    return Number(match[1]) || 0;
+  }
+
+  function pickBestVideoUrl(videoEl) {
+    const current = resolveUrl(videoEl.currentSrc || videoEl.src || "");
+    const currentScore = extractQualityScore(current);
+    const currentIsBlobLike = current.startsWith("blob:") || current.startsWith("data:");
+
+    const sourceCandidates = Array.from(videoEl.querySelectorAll("source[src]"))
+      .map((source) => {
+        const rawUrl = source.getAttribute("src") || source.src || "";
+        const url = resolveUrl(rawUrl);
+        if (!url) return null;
+
+        const score = Math.max(
+          extractQualityScore(source.getAttribute("size")),
+          extractQualityScore(source.getAttribute("label")),
+          extractQualityScore(source.getAttribute("res")),
+          extractQualityScore(source.getAttribute("data-quality")),
+          extractQualityScore(source.getAttribute("title")),
+          extractQualityScore(url),
+        );
+
+        return { url, score };
+      })
+      .filter(Boolean);
+
+    if (sourceCandidates.length) {
+      sourceCandidates.sort((a, b) => b.score - a.score);
+      const best = sourceCandidates[0] || null;
+      if (best?.url) {
+        if (currentIsBlobLike) return best.url;
+        if (!current) return best.url;
+        if ((best.score || 0) > currentScore) return best.url;
+      }
+    }
+
+    return current;
+  }
+
   function pickBestUrlFromElement(el) {
     if (!el) return "";
 
@@ -178,30 +254,242 @@
     return "";
   }
 
-  function extractImageUrlFromEventTarget(target) {
+  function extractMediaFromEventTarget(target) {
     if (!(target instanceof Element)) return null;
 
     if (target.closest?.("#ip-popout-overlay")) return null;
     if (target.closest?.("#ip-hover-wrap")) return null;
     if (target.closest?.("#ip-hover-toast")) return null;
 
+    const video = target.closest("video");
+    if (video) {
+      const url = pickBestVideoUrl(video);
+      if (url) return { type: "video", url };
+    }
+
     const img = target.closest("img");
     if (img) {
       const anchor = img.closest("a[href]");
-      if (anchor && isLikelyImageUrl(anchor.href)) return anchor.href;
-      return pickBestImageUrl(img);
+      if (anchor && isLikelyImageUrl(anchor.href))
+        return { type: "image", url: anchor.href };
+      const url = pickBestImageDownloadUrl(img);
+      if (url) return { type: "image", url };
+      return null;
     }
 
     const anchor = target.closest("a[href]");
-    if (anchor && isLikelyImageUrl(anchor.href)) return anchor.href;
+    if (anchor && isLikelyImageUrl(anchor.href))
+      return { type: "image", url: anchor.href };
+    if (anchor && isLikelyVideoUrl(anchor.href))
+      return { type: "video", url: anchor.href };
 
     const bgEl = target.closest("div,span,a,button,figure,section");
     if (bgEl) {
       const bgUrl = getBackgroundImageUrl(bgEl);
-      if (bgUrl) return bgUrl;
+      if (bgUrl) return { type: "image", url: bgUrl };
     }
 
     return null;
+  }
+
+  const EXT_BY_CONTENT_TYPE = {
+    "image/jpeg": "jpeg",
+    "image/jpg": "jpeg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/avif": "avif",
+    "image/gif": "gif",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+  };
+
+  const KNOWN_EXTENSIONS = new Set([
+    "jpeg",
+    "jpg",
+    "png",
+    "webp",
+    "avif",
+    "gif",
+    "mp4",
+    "webm",
+  ]);
+
+  function isPopoutOpen() {
+    return Boolean(STATE.overlay?.classList.contains("ip-open"));
+  }
+
+  function inferExtensionFromContentType(contentType) {
+    if (!contentType) return "";
+    const normalized = String(contentType).toLowerCase().split(";")[0].trim();
+    return EXT_BY_CONTENT_TYPE[normalized] || "";
+  }
+
+  function inferExtensionFromUrl(url) {
+    if (!url) return "";
+    try {
+      const parsed = new URL(url, window.location.href);
+      const pathExtMatch = parsed.pathname.toLowerCase().match(/\.([a-z0-9]{2,5})$/);
+      if (pathExtMatch) {
+        const ext = pathExtMatch[1];
+        if (KNOWN_EXTENSIONS.has(ext)) return ext === "jpg" ? "jpeg" : ext;
+      }
+
+      const possibleKeys = ["format", "ext", "extension", "mime"];
+      for (const key of possibleKeys) {
+        const value = parsed.searchParams.get(key);
+        if (!value) continue;
+        const normalized = value.toLowerCase().replace(/^image\//, "").replace(/^video\//, "");
+        if (KNOWN_EXTENSIONS.has(normalized)) {
+          return normalized === "jpg" ? "jpeg" : normalized;
+        }
+      }
+    } catch {}
+    return "";
+  }
+
+  function parseContentTypeFromHeaders(headers) {
+    if (!headers) return "";
+    const match = String(headers).match(/^\s*content-type\s*:\s*([^\r\n]+)/im);
+    return match ? match[1].trim() : "";
+  }
+
+  function buildDownloadBaseName() {
+    const now = new Date();
+    const yyyy = String(now.getFullYear());
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    const host = (window.location.hostname || "site").replace(/[^a-z0-9.-]+/gi, "_");
+    return `ip_${host}_${yyyy}-${mm}-${dd}_${hh}-${min}-${ss}`;
+  }
+
+  function buildDownloadFilename(url, contentType) {
+    const ext =
+      inferExtensionFromContentType(contentType) ||
+      inferExtensionFromUrl(url) ||
+      "bin";
+    return `${buildDownloadBaseName()}.${ext}`;
+  }
+
+  function getCurrentPopoutMediaForDownload() {
+    if (!isPopoutOpen()) return null;
+
+    if (STATE.lastMediaType === "video") {
+      const videoUrl = STATE.video ? pickBestVideoUrl(STATE.video) : "";
+      if (videoUrl) return { type: "video", url: videoUrl };
+    }
+
+    const imageUrl = STATE.img ? pickBestImageDownloadUrl(STATE.img) : "";
+    if (imageUrl) return { type: "image", url: imageUrl };
+
+    if (STATE.lastUrl) {
+      return { type: STATE.lastMediaType || "image", url: resolveUrl(STATE.lastUrl) };
+    }
+
+    return null;
+  }
+
+  function runGMDownload(url, name) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_download !== "function") {
+        reject(new Error("GM_download unavailable"));
+        return;
+      }
+
+      try {
+        GM_download({
+          url,
+          name,
+          saveAs: false,
+          onload: () => resolve(),
+          onerror: (error) => reject(error || new Error("GM_download failed")),
+          ontimeout: () => reject(new Error("GM_download timeout")),
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  function fetchBlobViaGM(url) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== "function") {
+        reject(new Error("GM_xmlhttpRequest unavailable"));
+        return;
+      }
+
+      try {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url,
+          responseType: "blob",
+          anonymous: false,
+          onload: (response) => {
+            const status = Number(response?.status) || 0;
+            if (status && (status < 200 || status >= 400)) {
+              reject(new Error(`Request failed with status ${status}`));
+              return;
+            }
+            const headers = parseContentTypeFromHeaders(response?.responseHeaders || "");
+            let blob = response?.response;
+            if (!(blob instanceof Blob) && blob != null) {
+              blob = new Blob([blob], {
+                type:
+                  inferExtensionFromContentType(headers) ? headers : "application/octet-stream",
+              });
+            }
+            if (!(blob instanceof Blob)) {
+              reject(new Error("No blob response"));
+              return;
+            }
+            resolve({ blob, contentType: headers || blob.type || "" });
+          },
+          onerror: (error) => reject(error || new Error("GM_xmlhttpRequest failed")),
+          ontimeout: () => reject(new Error("GM_xmlhttpRequest timeout")),
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  function downloadBlobToDisk(blob, filename) {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    link.style.display = "none";
+    (document.body || document.documentElement).appendChild(link);
+    link.click();
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+      link.remove();
+    }, 1000);
+  }
+
+  async function downloadCurrentMedia() {
+    const media = getCurrentPopoutMediaForDownload();
+    const url = media?.url || "";
+    if (!url) return;
+
+    const fallbackName = buildDownloadFilename(url, "");
+    try {
+      await runGMDownload(url, fallbackName);
+      showPopoutToast("Download started");
+      return;
+    } catch {}
+
+    try {
+      const { blob, contentType } = await fetchBlobViaGM(url);
+      const finalName = buildDownloadFilename(url, contentType);
+      downloadBlobToDisk(blob, finalName);
+      showPopoutToast("Downloaded");
+    } catch (error) {
+      console.error("[Image Popout] Download failed:", error);
+      showPopoutToast("Download failed");
+    }
   }
 
   function clamp(value, min, max) {
@@ -431,6 +719,13 @@
         object-fit: contain;
         background: var(--ip-glass-image-backdrop);
       }
+      #ip-popout-video {
+        width: 100%;
+        height: 100%;
+        display: none;
+        object-fit: contain;
+        background: var(--ip-glass-image-backdrop);
+      }
       #ip-popout-resize {
         position: absolute;
         right: 0;
@@ -516,6 +811,12 @@
     btnOpen.textContent = "Open";
     btnOpen.dataset.action = "open";
 
+    const btnDownload = document.createElement("button");
+    btnDownload.type = "button";
+    btnDownload.className = "ip-btn";
+    btnDownload.textContent = "Download";
+    btnDownload.dataset.action = "download";
+
     const btnClose = document.createElement("button");
     btnClose.type = "button";
     btnClose.className = "ip-btn";
@@ -532,6 +833,12 @@
     img.alt = "";
     img.decoding = "async";
 
+    const video = document.createElement("video");
+    video.id = "ip-popout-video";
+    video.controls = true;
+    video.playsInline = true;
+    video.preload = "metadata";
+
     const resize = document.createElement("div");
     resize.id = "ip-popout-resize";
     resize.setAttribute("role", "presentation");
@@ -541,9 +848,11 @@
     toast.textContent = "";
 
     body.appendChild(img);
+    body.appendChild(video);
     titlebar.appendChild(title);
     titlebar.appendChild(btnCopy);
     titlebar.appendChild(btnOpen);
+    titlebar.appendChild(btnDownload);
     titlebar.appendChild(btnClose);
 
     win.appendChild(titlebar);
@@ -569,6 +878,7 @@
       if (action === "close") closePopout();
       if (action === "open") openInNewTab();
       if (action === "copy") copyUrlToClipboard();
+      if (action === "download") void downloadCurrentMedia();
     });
 
     titlebar.addEventListener("pointerdown", startDrag, { passive: false });
@@ -580,6 +890,7 @@
     STATE.popout = win;
     STATE.titlebar = titlebar;
     STATE.img = img;
+    STATE.video = video;
     STATE.title = title;
   }
 
@@ -625,30 +936,61 @@
     STATE.popout.style.height = `${winH}px`;
   }
 
-  function openPopout(url) {
+  function openPopout(media) {
     buildUi();
     if (!STATE.overlay || !STATE.popout || !STATE.img || !STATE.title) return;
 
-    STATE.lastUrl = url;
-    STATE.title.textContent = url;
+    const mediaUrl =
+      typeof media === "string"
+        ? media
+        : typeof media?.url === "string"
+          ? media.url
+          : "";
+    const mediaType =
+      typeof media === "object" && media?.type === "video" ? "video" : "image";
+    if (!mediaUrl) return;
+
+    STATE.lastUrl = mediaUrl;
+    STATE.lastMediaType = mediaType;
+    STATE.title.textContent = mediaUrl;
     STATE.popoutAutoFit = true;
 
     maximizePopoutToViewport();
 
     STATE.overlay.classList.add("ip-open");
 
-    // Load image
     const img = STATE.img;
-    img.src = "";
-    img.src = url;
+    const video = STATE.video;
 
-    img.onload = () => clampPopoutToViewport();
+    if (mediaType === "video" && video) {
+      img.style.display = "none";
+      img.src = "";
 
-    img.onerror = () => showPopoutToast("Failed to load image");
+      video.style.display = "block";
+      video.pause();
+      video.src = "";
+      video.src = mediaUrl;
+      video.load();
+      video.onloadedmetadata = () => clampPopoutToViewport();
+      video.onerror = () => showPopoutToast("Failed to load video");
+    } else {
+      if (video) {
+        video.pause();
+        video.style.display = "none";
+        video.src = "";
+      }
+
+      img.style.display = "block";
+      img.src = "";
+      img.src = mediaUrl;
+      img.onload = () => clampPopoutToViewport();
+      img.onerror = () => showPopoutToast("Failed to load image");
+    }
   }
 
   function closePopout() {
     if (!STATE.overlay) return;
+    if (STATE.video) STATE.video.pause();
     STATE.overlay.classList.remove("ip-open");
   }
 
@@ -1214,6 +1556,18 @@
       return;
     }
 
+    if (
+      isPopoutOpen() &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      (event.key === "d" || event.key === "D")
+    ) {
+      event.preventDefault();
+      if (!event.repeat) void downloadCurrentMedia();
+      return;
+    }
+
     if (event.key === "z" || event.key === "Z") {
       hoverState.enabled = !hoverState.enabled;
       saveHoverState();
@@ -1253,14 +1607,14 @@
     if (event.button !== 0) return;
     if (event.defaultPrevented) return;
 
-    const url = extractImageUrlFromEventTarget(event.target);
-    if (!url) return;
+    const media = extractMediaFromEventTarget(event.target);
+    if (!media?.url) return;
 
     event.preventDefault();
     event.stopPropagation();
 
     disableHoverPreviewForPopout();
-    openPopout(url);
+    openPopout(media);
   }
 
   window.addEventListener("keydown", onKeyDown, true);
