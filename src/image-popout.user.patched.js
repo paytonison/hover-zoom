@@ -6,7 +6,9 @@
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_download
+// @grant        GM_xmlhttpRequest
+// @connect      *
 // ==/UserScript==
 
 (() => {
@@ -22,6 +24,7 @@
     titlebar: "hz-titlebar",
     title: "hz-title",
     popoutImg: "hz-popout-img",
+    popoutVideo: "hz-popout-video",
     popoutToast: "hz-popout-toast",
     resize: "hz-resize",
     hoverWrap: "hz-hover-wrap",
@@ -65,6 +68,36 @@
     },
   };
 
+  const EXT_BY_CONTENT_TYPE = {
+    "application/vnd.apple.mpegurl": "m3u8",
+    "application/x-mpegurl": "m3u8",
+    "image/avif": "avif",
+    "image/gif": "gif",
+    "image/jpeg": "jpeg",
+    "image/jpg": "jpeg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "video/mp4": "mp4",
+    "video/ogg": "ogv",
+    "video/quicktime": "mov",
+    "video/webm": "webm",
+  };
+
+  const KNOWN_EXTENSIONS = new Set([
+    "avif",
+    "gif",
+    "jpeg",
+    "jpg",
+    "m3u8",
+    "m4v",
+    "mov",
+    "mp4",
+    "ogv",
+    "png",
+    "webm",
+    "webp",
+  ]);
+
   const state = {
     hover: {
       enabled: loadPrefs().enabled,
@@ -84,6 +117,7 @@
     popout: {
       open: false,
       url: "",
+      mediaType: "image",
       autoFit: true,
       loadToken: 0,
       drag: null,
@@ -95,6 +129,7 @@
       popoutWindow: null,
       popoutTitle: null,
       popoutImg: null,
+      popoutVideo: null,
       popoutToast: null,
       hoverWrap: null,
       hoverImg: null,
@@ -271,12 +306,20 @@
         background: var(--hz-image-bg);
       }
 
-      #${IDS.popoutImg} {
+      #${IDS.popoutImg},
+      #${IDS.popoutVideo} {
         width: 100%;
         height: 100%;
-        display: block;
         object-fit: contain;
         background: var(--hz-image-bg);
+      }
+
+      #${IDS.popoutImg} {
+        display: block;
+      }
+
+      #${IDS.popoutVideo} {
+        display: none;
       }
 
       #${IDS.resize} {
@@ -402,6 +445,7 @@
 
     const copyBtn = buildButton("Copy URL", "copy");
     const openBtn = buildButton("Open", "open");
+    const downloadBtn = buildButton("Download", "download");
     const closeBtn = buildButton("×", "close");
     closeBtn.id = "hz-close-btn";
     closeBtn.setAttribute("aria-label", "Close");
@@ -414,6 +458,12 @@
     popoutImg.alt = "";
     popoutImg.decoding = "async";
 
+    const popoutVideo = document.createElement("video");
+    popoutVideo.id = IDS.popoutVideo;
+    popoutVideo.controls = true;
+    popoutVideo.playsInline = true;
+    popoutVideo.preload = "metadata";
+
     const resize = document.createElement("div");
     resize.id = IDS.resize;
     resize.setAttribute("role", "presentation");
@@ -421,8 +471,8 @@
     const popoutToast = document.createElement("div");
     popoutToast.id = IDS.popoutToast;
 
-    titlebar.append(title, copyBtn, openBtn, closeBtn);
-    body.appendChild(popoutImg);
+    titlebar.append(title, copyBtn, openBtn, downloadBtn, closeBtn);
+    body.append(popoutImg, popoutVideo);
     popoutWindow.append(titlebar, body, resize);
     overlay.append(backdrop, popoutWindow, popoutToast);
 
@@ -449,6 +499,7 @@
     state.ui.popoutWindow = popoutWindow;
     state.ui.popoutTitle = title;
     state.ui.popoutImg = popoutImg;
+    state.ui.popoutVideo = popoutVideo;
     state.ui.popoutToast = popoutToast;
     state.ui.hoverWrap = hoverWrap;
     state.ui.hoverImg = hoverImg;
@@ -504,6 +555,7 @@
     if (action === "close") closePopout();
     if (action === "open") openPopoutUrlInNewTab();
     if (action === "copy") copyPopoutUrl();
+    if (action === "download") void downloadCurrentMedia();
   }
 
   function onDocumentClick(event) {
@@ -579,6 +631,18 @@
       tag === "SELECT" ||
       event.target?.isContentEditable
     ) {
+      return;
+    }
+
+    if (
+      state.popout.open &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      (event.key === "d" || event.key === "D")
+    ) {
+      event.preventDefault();
+      if (!event.repeat) void downloadCurrentMedia();
       return;
     }
 
@@ -674,7 +738,7 @@
 
   function onViewportChange() {
     if (state.popout.open) {
-      if (state.popout.autoFit) fitPopoutToImage();
+      if (state.popout.autoFit) fitPopoutToMedia();
       clampPopoutToViewport();
     }
 
@@ -704,7 +768,7 @@
   function handleAltClick(event) {
     if (event.defaultPrevented) return;
 
-    const candidate = findImageCandidate(event.target);
+    const candidate = findPopoutCandidate(event.target);
     if (!candidate) return;
 
     event.preventDefault();
@@ -712,7 +776,7 @@
 
     state.hover.pinned = false;
     hideHover();
-    openPopout(candidate.url);
+    openPopout(candidate);
   }
 
   function handlePinClick(event) {
@@ -875,11 +939,23 @@
     state.ui.hoverWrap.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
   }
 
-  function openPopout(url) {
+  function openPopout(media) {
+    const mediaUrl =
+      typeof media === "string"
+        ? media
+        : typeof media?.url === "string"
+          ? media.url
+          : "";
+    const mediaType =
+      typeof media === "object" && media?.type === "video" ? "video" : "image";
+
+    if (!mediaUrl) return;
+
     state.popout.open = true;
-    state.popout.url = url;
+    state.popout.url = mediaUrl;
+    state.popout.mediaType = mediaType;
     state.popout.autoFit = true;
-    state.ui.popoutTitle.textContent = url;
+    state.ui.popoutTitle.textContent = mediaUrl;
     state.ui.overlay.classList.add("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
 
@@ -893,10 +969,45 @@
 
     const token = ++state.popout.loadToken;
     const img = state.ui.popoutImg;
+    const video = state.ui.popoutVideo;
 
+    img.onload = null;
+    img.onerror = null;
+    video.onloadedmetadata = null;
+    video.onerror = null;
+
+    if (mediaType === "video") {
+      img.style.display = "none";
+      img.removeAttribute("src");
+
+      video.style.display = "block";
+      video.pause();
+      video.removeAttribute("src");
+      video.src = mediaUrl;
+
+      video.onloadedmetadata = () => {
+        if (token !== state.popout.loadToken) return;
+        if (state.popout.autoFit) fitPopoutToMedia();
+      };
+
+      video.onerror = () => {
+        if (token !== state.popout.loadToken) return;
+        showPopoutToast("Failed to load video");
+      };
+
+      video.load();
+      return;
+    }
+
+    video.pause();
+    video.style.display = "none";
+    video.removeAttribute("src");
+    video.load();
+
+    img.style.display = "block";
     img.onload = () => {
       if (token !== state.popout.loadToken) return;
-      if (state.popout.autoFit) fitPopoutToImage();
+      if (state.popout.autoFit) fitPopoutToMedia();
     };
 
     img.onerror = () => {
@@ -904,13 +1015,13 @@
       showPopoutToast("Failed to load image");
     };
 
-    if (img.src === url && img.complete && img.naturalWidth) {
-      fitPopoutToImage();
+    if (img.src === mediaUrl && img.complete && img.naturalWidth) {
+      fitPopoutToMedia();
       return;
     }
 
     img.removeAttribute("src");
-    img.src = url;
+    img.src = mediaUrl;
   }
 
   function closePopout() {
@@ -918,6 +1029,7 @@
     state.popout.open = false;
     state.popout.drag = null;
     state.popout.resize = null;
+    state.ui.popoutVideo.pause();
     state.ui.overlay.classList.remove("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
     document.documentElement.style.userSelect = "";
@@ -937,6 +1049,181 @@
     } catch {
       window.prompt("Copy image URL:", state.popout.url);
     }
+  }
+
+  async function downloadCurrentMedia() {
+    const url = getCurrentPopoutMediaUrl();
+    if (!url) return;
+
+    const fallbackName = buildDownloadFilename(url, "");
+    try {
+      await runGMDownload(url, fallbackName);
+      showPopoutToast("Download started");
+      return;
+    } catch {}
+
+    try {
+      const { blob, contentType } = await fetchBlobViaGM(url);
+      const filename = buildDownloadFilename(url, contentType);
+      downloadBlobToDisk(blob, filename);
+      showPopoutToast("Downloaded");
+    } catch (error) {
+      console.error("[Image Popout] Download failed:", error);
+      showPopoutToast("Download failed");
+    }
+  }
+
+  function getCurrentPopoutMediaUrl() {
+    if (!state.popout.open || !state.popout.url) return "";
+    if (state.popout.mediaType === "video") {
+      return pickBestVideoUrl(state.ui.popoutVideo) || resolveUrl(state.popout.url);
+    }
+    return resolveUrl(state.popout.url);
+  }
+
+  function inferExtensionFromContentType(contentType) {
+    if (!contentType) return "";
+    const normalized = String(contentType).toLowerCase().split(";")[0].trim();
+    return EXT_BY_CONTENT_TYPE[normalized] || "";
+  }
+
+  function inferExtensionFromUrl(url) {
+    if (!url) return "";
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      const pathExtMatch = parsed.pathname.toLowerCase().match(/\.([a-z0-9]{2,5})$/);
+      if (pathExtMatch) {
+        const ext = pathExtMatch[1];
+        if (KNOWN_EXTENSIONS.has(ext)) return ext === "jpg" ? "jpeg" : ext;
+      }
+
+      for (const key of ["ext", "extension", "format", "mime", "name"]) {
+        const value = parsed.searchParams.get(key);
+        if (!value) continue;
+        const normalized = value
+          .toLowerCase()
+          .replace(/^image\//, "")
+          .replace(/^video\//, "");
+        if (KNOWN_EXTENSIONS.has(normalized)) {
+          return normalized === "jpg" ? "jpeg" : normalized;
+        }
+      }
+    } catch {}
+
+    return "";
+  }
+
+  function parseContentTypeFromHeaders(headers) {
+    if (!headers) return "";
+    const match = String(headers).match(/^\s*content-type\s*:\s*([^\r\n]+)/im);
+    return match ? match[1].trim() : "";
+  }
+
+  function buildDownloadBaseName() {
+    const now = new Date();
+    const yyyy = String(now.getFullYear());
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const hh = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    const host = (window.location.hostname || "site").replace(
+      /[^a-z0-9.-]+/gi,
+      "_",
+    );
+    return `hz_${host}_${yyyy}-${mm}-${dd}_${hh}-${min}-${ss}`;
+  }
+
+  function buildDownloadFilename(url, contentType) {
+    const ext =
+      inferExtensionFromContentType(contentType) ||
+      inferExtensionFromUrl(url) ||
+      "bin";
+    return `${buildDownloadBaseName()}.${ext}`;
+  }
+
+  function runGMDownload(url, name) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_download !== "function") {
+        reject(new Error("GM_download unavailable"));
+        return;
+      }
+
+      try {
+        GM_download({
+          url,
+          name,
+          saveAs: false,
+          onload: () => resolve(),
+          onerror: (error) => reject(error || new Error("GM_download failed")),
+          ontimeout: () => reject(new Error("GM_download timeout")),
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  function fetchBlobViaGM(url) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== "function") {
+        reject(new Error("GM_xmlhttpRequest unavailable"));
+        return;
+      }
+
+      try {
+        GM_xmlhttpRequest({
+          method: "GET",
+          url,
+          responseType: "blob",
+          anonymous: false,
+          onload: (response) => {
+            const status = Number(response?.status) || 0;
+            if (status && (status < 200 || status >= 400)) {
+              reject(new Error(`Request failed with status ${status}`));
+              return;
+            }
+
+            const contentType = parseContentTypeFromHeaders(
+              response?.responseHeaders || "",
+            );
+            let blob = response?.response;
+            if (!(blob instanceof Blob) && blob != null) {
+              blob = new Blob([blob], {
+                type: contentType || "application/octet-stream",
+              });
+            }
+
+            if (!(blob instanceof Blob)) {
+              reject(new Error("No blob response"));
+              return;
+            }
+
+            resolve({ blob, contentType: contentType || blob.type || "" });
+          },
+          onerror: (error) =>
+            reject(error || new Error("GM_xmlhttpRequest failed")),
+          ontimeout: () => reject(new Error("GM_xmlhttpRequest timeout")),
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  function downloadBlobToDisk(blob, filename) {
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    link.style.display = "none";
+    (document.body || document.documentElement).appendChild(link);
+    link.click();
+    window.setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+      link.remove();
+    }, 1000);
   }
 
   function showHoverToast(message) {
@@ -1037,9 +1324,10 @@
     } catch {}
   }
 
-  function fitPopoutToImage() {
-    const img = state.ui.popoutImg;
-    if (!img) return;
+  function fitPopoutToMedia() {
+    const isVideo = state.popout.mediaType === "video";
+    const media = isVideo ? state.ui.popoutVideo : state.ui.popoutImg;
+    if (!media) return;
 
     const { width: vw, height: vh } = getViewport();
     const pad = CONFIG.viewportPadding;
@@ -1056,8 +1344,16 @@
       maxHeight - CONFIG.popout.titlebarHeight,
     );
 
-    const naturalW = Math.max(1, img.naturalWidth || maxWidth);
-    const naturalH = Math.max(1, img.naturalHeight || maxBodyHeight);
+    const naturalW = Math.max(
+      1,
+      isVideo ? media.videoWidth || maxWidth : media.naturalWidth || maxWidth,
+    );
+    const naturalH = Math.max(
+      1,
+      isVideo
+        ? media.videoHeight || maxBodyHeight
+        : media.naturalHeight || maxBodyHeight,
+    );
     const scale = Math.min(maxWidth / naturalW, maxBodyHeight / naturalH, 1);
 
     const width = clamp(
@@ -1176,6 +1472,35 @@
     return null;
   }
 
+  function findPopoutCandidate(start) {
+    if (!(start instanceof Element)) return null;
+    if (isInsideUserscriptUi(start)) return null;
+
+    const video = start.closest("video");
+    if (video) {
+      const videoUrl = pickBestVideoUrl(video);
+      if (videoUrl) {
+        return { element: video, type: "video", url: videoUrl };
+      }
+    }
+
+    const imageCandidate = findImageCandidate(start);
+    if (imageCandidate) {
+      return { ...imageCandidate, type: "image" };
+    }
+
+    for (let element = start; element; element = element.parentElement) {
+      if (element.matches?.("a[href]")) {
+        const href = element.getAttribute("href") || "";
+        if (isLikelyVideoUrl(href)) {
+          return { element, type: "video", url: resolveUrl(href) };
+        }
+      }
+    }
+
+    return null;
+  }
+
   function isInsideUserscriptUi(element) {
     return Boolean(
       element.closest?.(
@@ -1212,6 +1537,52 @@
     }
 
     return resolveUrl(image.src || "");
+  }
+
+  function pickBestVideoUrl(video) {
+    if (!video) return "";
+
+    const current = resolveUrl(video.currentSrc || video.src || "");
+    const currentScore = extractQualityScore(current);
+    const currentIsBlobLike =
+      current.startsWith("blob:") || current.startsWith("data:");
+
+    const sourceCandidates = Array.from(video.querySelectorAll("source[src]"))
+      .map((source) => {
+        const rawUrl = source.getAttribute("src") || source.src || "";
+        const url = resolveUrl(rawUrl);
+        if (!url) return null;
+
+        const score = Math.max(
+          extractQualityScore(source.getAttribute("data-quality")),
+          extractQualityScore(source.getAttribute("label")),
+          extractQualityScore(source.getAttribute("res")),
+          extractQualityScore(source.getAttribute("size")),
+          extractQualityScore(source.getAttribute("title")),
+          extractQualityScore(url),
+        );
+
+        return { url, score };
+      })
+      .filter(Boolean);
+
+    if (sourceCandidates.length) {
+      sourceCandidates.sort((a, b) => b.score - a.score);
+      const best = sourceCandidates[0];
+      if (best?.url) {
+        if (currentIsBlobLike) return best.url;
+        if (!current) return best.url;
+        if ((best.score || 0) > currentScore) return best.url;
+      }
+    }
+
+    return current;
+  }
+
+  function extractQualityScore(value) {
+    if (!value) return 0;
+    const match = String(value).toLowerCase().match(/(\d{3,4})\s*p?/);
+    return match ? Number(match[1]) || 0 : 0;
   }
 
   function pickBestSrcsetUrl(srcset) {
@@ -1282,9 +1653,21 @@
     }
   }
 
+  function isLikelyVideoUrl(url) {
+    if (!url) return false;
+    if (url.startsWith("data:video/")) return true;
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      return /\.(m4v|mp4|mov|webm|ogv|m3u8)(?:$|\?)/i.test(parsed.pathname);
+    } catch {
+      return false;
+    }
+  }
+
   function resolveUrl(url) {
     if (!url) return "";
-    if (url.startsWith("data:image/")) return url;
+    if (url.startsWith("data:image/") || url.startsWith("data:video/")) return url;
 
     try {
       return normalizeKnownImageUrl(new URL(url, window.location.href).href);
@@ -1294,7 +1677,9 @@
   }
 
   function normalizeKnownImageUrl(url) {
-    if (!url || url.startsWith("data:image/")) return url;
+    if (!url || url.startsWith("data:image/") || url.startsWith("data:video/")) {
+      return url;
+    }
 
     try {
       const parsed = new URL(url, window.location.href);
