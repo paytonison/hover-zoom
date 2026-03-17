@@ -1335,10 +1335,7 @@
     const rect = hoverActive.el.getBoundingClientRect();
 
     const inside =
-      x >= rect.left &&
-      x <= rect.right &&
-      y >= rect.top &&
-      y <= rect.bottom;
+      x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 
     if (!inside) {
       hideHoverWrap();
