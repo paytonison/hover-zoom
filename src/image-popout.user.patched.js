@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      0.2.3
-// @description  Hover images for a near-cursor preview (click pins; Z toggles; Esc hides). Alt/Option-click opens a movable, resizable overlay.
+// @version      1.0.0
+// @description  Hover images for a near-cursor preview. Click pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
@@ -14,27 +14,25 @@
 
   if (window.top !== window.self) return;
 
-  const OPTIONS = {
-    trigger: "alt-click", // Only alt/option click for now.
-    minWidth: 260,
-    minHeight: 200,
-    maxScaleUp: 2.5,
-    viewportPadding: 12,
-    maxViewportFraction: 0.82,
+  const IDS = {
+    style: "hz-style",
+    overlay: "hz-overlay",
+    backdrop: "hz-backdrop",
+    window: "hz-window",
+    titlebar: "hz-titlebar",
+    title: "hz-title",
+    popoutImg: "hz-popout-img",
+    popoutToast: "hz-popout-toast",
+    resize: "hz-resize",
+    hoverWrap: "hz-hover-wrap",
+    hoverImg: "hz-hover-img",
+    hoverBadge: "hz-hover-badge",
+    hoverToast: "hz-hover-toast",
   };
 
-  const STATE = {
-    overlay: null,
-    popout: null,
-    titlebar: null,
-    img: null,
-    title: null,
-    popoutAutoFit: true,
-    drag: null,
-    resize: null,
-    lastUrl: null,
-  };
-
+  const STORAGE_KEY = "image_popout_safari_v2";
+  const BACKGROUND_IMAGE_SELECTOR =
+    "div, span, a, button, figure, section, article, li";
   const LAZY_IMAGE_ATTRS = [
     "data-src",
     "data-original",
@@ -46,1165 +44,535 @@
     "data-large",
   ];
 
-  function isLikelyImageUrl(url) {
-    if (!url) return false;
-    if (url.startsWith("data:image/")) return true;
+  const CONFIG = {
+    minTargetPixels: 48,
+    viewportPadding: 12,
+    popout: {
+      titlebarHeight: 44,
+      minWidth: 260,
+      minHeight: 200,
+      maxViewportFraction: 0.82,
+    },
+    hover: {
+      offset: 16,
+      maxViewportFraction: 1,
+      viewportPadding: 8,
+      borderRadius: 14,
+      padding: 10,
+      borderWidth: 1,
+      fallbackWidth: 800,
+      fallbackHeight: 600,
+    },
+  };
+
+  const state = {
+    hover: {
+      enabled: loadPrefs().enabled,
+      pinned: false,
+      target: null,
+      url: "",
+      mouseX: 0,
+      mouseY: 0,
+      naturalW: 0,
+      naturalH: 0,
+      wrapW: 320,
+      wrapH: 240,
+      loadToken: 0,
+      lastEventTarget: null,
+      toastTimer: 0,
+    },
+    popout: {
+      open: false,
+      url: "",
+      autoFit: true,
+      loadToken: 0,
+      drag: null,
+      resize: null,
+      toastTimer: 0,
+    },
+    ui: {
+      overlay: null,
+      popoutWindow: null,
+      popoutTitle: null,
+      popoutImg: null,
+      popoutToast: null,
+      hoverWrap: null,
+      hoverImg: null,
+      hoverBadge: null,
+      hoverToast: null,
+    },
+  };
+
+  init();
+
+  function init() {
+    injectStyles();
+    buildUi();
+    bindEvents();
+  }
+
+  function loadPrefs() {
     try {
-      const parsed = new URL(url, window.location.href);
-      const path = parsed.pathname.toLowerCase();
-      return /\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)$/.test(path);
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return { enabled: true };
+      const parsed = JSON.parse(raw);
+      return { enabled: parsed.enabled !== false };
     } catch {
-      return false;
+      return { enabled: true };
     }
   }
 
-  function normalizeKnownImageUrl(url) {
-    if (!url) return url;
-    if (url.startsWith("data:image/")) return url;
+  function savePrefs() {
     try {
-      const parsed = new URL(url, window.location.href);
-      const host = parsed.hostname.toLowerCase();
-
-      // X / Twitter CDN: prefer original-size assets when possible.
-      if (host.endsWith("twimg.com")) {
-        if (parsed.searchParams.has("format")) {
-          parsed.searchParams.set("name", "orig");
-        } else if (parsed.searchParams.has("name")) {
-          parsed.searchParams.set("name", "orig");
-        }
-        return parsed.href;
-      }
-
-      return parsed.href;
-    } catch {
-      return url;
-    }
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ enabled: state.hover.enabled }),
+      );
+    } catch {}
   }
 
-  function resolveUrl(url) {
-    if (!url) return "";
-    try {
-      return normalizeKnownImageUrl(new URL(url, window.location.href).href);
-    } catch {
-      return normalizeKnownImageUrl(url);
-    }
-  }
+  function injectStyles() {
+    if (document.getElementById(IDS.style)) return;
 
-  function parseSrcset(srcset) {
-    if (!srcset) return [];
-    return srcset
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .map((part) => {
-        const [url, descriptor] = part.split(/\s+/, 2);
-        const desc = descriptor?.trim() ?? "";
-        const widthMatch = desc.match(/^(\d+)w$/);
-        const densityMatch = desc.match(/^(\d+(?:\.\d+)?)x$/);
-        return {
-          url,
-          width: widthMatch ? Number(widthMatch[1]) : null,
-          density: densityMatch ? Number(densityMatch[1]) : null,
-        };
-      })
-      .filter((e) => e.url);
-  }
-
-  function pickBestSrcsetUrl(srcset) {
-    const entries = parseSrcset(srcset);
-    if (entries.length === 0) return "";
-
-    // Prefer the largest width descriptor if present; otherwise the largest density.
-    const withWidth = entries.filter((e) => typeof e.width === "number");
-    if (withWidth.length) {
-      withWidth.sort((a, b) => (b.width ?? 0) - (a.width ?? 0));
-      const best = withWidth[0]?.url ?? "";
-      return best ? resolveUrl(best) : "";
-    }
-
-    const withDensity = entries.filter((e) => typeof e.density === "number");
-    if (withDensity.length) {
-      withDensity.sort((a, b) => (b.density ?? 0) - (a.density ?? 0));
-      const best = withDensity[0]?.url ?? "";
-      return best ? resolveUrl(best) : "";
-    }
-
-    return resolveUrl(entries[0]?.url ?? "");
-  }
-
-  function getBackgroundImageUrl(el) {
-    if (!el) return "";
-    try {
-      const bg = getComputedStyle(el).backgroundImage;
-      if (!bg || bg === "none") return "";
-      const match = bg.match(/url\(["']?(.*?)["']?\)/i);
-      return resolveUrl(match?.[1] ?? "");
-    } catch {
-      return "";
-    }
-  }
-
-  function pickBestImageUrl(imgEl) {
-    if (imgEl.currentSrc) return imgEl.currentSrc;
-
-    const srcset = imgEl.getAttribute("srcset") || imgEl.srcset || "";
-    const bestSrcset = pickBestSrcsetUrl(srcset);
-    if (bestSrcset) return bestSrcset;
-
-    for (const key of LAZY_IMAGE_ATTRS) {
-      const value = imgEl.getAttribute(key);
-      if (value) return resolveUrl(value);
-    }
-
-    return imgEl.src || null;
-  }
-
-  function pickBestUrlFromElement(el) {
-    if (!el) return "";
-
-    if (el.tagName === "IMG") {
-      return pickBestImageUrl(el) || "";
-    }
-
-    const anchor = el.closest?.("a[href]");
-    if (anchor) {
-      const href = anchor.getAttribute("href") || "";
-      if (isLikelyImageUrl(href)) return resolveUrl(href);
-    }
-
-    const bg = getBackgroundImageUrl(el);
-    if (bg) return bg;
-
-    return "";
-  }
-
-  function extractImageUrlFromEventTarget(target) {
-    if (!(target instanceof Element)) return null;
-
-    if (target.closest?.("#ip-popout-overlay")) return null;
-    if (target.closest?.("#ip-hover-wrap")) return null;
-    if (target.closest?.("#ip-hover-toast")) return null;
-
-    const img = target.closest("img");
-    if (img) {
-      const anchor = img.closest("a[href]");
-      if (anchor && isLikelyImageUrl(anchor.href)) return anchor.href;
-      return pickBestImageUrl(img);
-    }
-
-    const anchor = target.closest("a[href]");
-    if (anchor && isLikelyImageUrl(anchor.href)) return anchor.href;
-
-    const bgEl = target.closest("div,span,a,button,figure,section");
-    if (bgEl) {
-      const bgUrl = getBackgroundImageUrl(bgEl);
-      if (bgUrl) return bgUrl;
-    }
-
-    return null;
-  }
-
-  function clamp(value, min, max) {
-    return Math.min(max, Math.max(min, value));
-  }
-
-  function getViewport() {
-    const vv = window.visualViewport;
-    if (vv?.width && vv?.height) return { width: vv.width, height: vv.height };
-    return { width: window.innerWidth, height: window.innerHeight };
-  }
-
-  function ensureStyles() {
-    if (document.getElementById("ip-popout-style")) return;
     const style = document.createElement("style");
-    style.id = "ip-popout-style";
+    style.id = IDS.style;
     style.textContent = `
       :root {
-        --ip-glass-blur: 12px;
-        --ip-glass-sat: 150%;
-        --ip-glass-radius-xl: 16px;
-        --ip-glass-radius-lg: 14px;
-        --ip-glass-radius-md: 10px;
-        --ip-glass-radius-sm: 8px;
-        --ip-glass-text: rgba(26, 26, 28, 0.92);
-        --ip-glass-text-muted: rgba(26, 26, 28, 0.65);
-        --ip-glass-surface: rgba(255, 255, 255, 0.52);
-        --ip-glass-surface-strong: rgba(255, 255, 255, 0.64);
-        --ip-glass-surface-soft: rgba(255, 255, 255, 0.38);
-        --ip-glass-border: rgba(255, 255, 255, 0.55);
-        --ip-glass-border-outer: rgba(255, 255, 255, 0.33);
-        --ip-glass-border-outer-soft: rgba(255, 255, 255, 0.2);
-        --ip-glass-border-soft: rgba(0, 0, 0, 0.1);
-        --ip-glass-border-hairline: rgba(0, 0, 0, 0.22);
-        --ip-glass-shadow:
-          0 26px 60px rgba(18, 18, 20, 0.16),
-          0 4px 12px rgba(18, 18, 20, 0.1);
-        --ip-glass-shadow-soft: 0 10px 28px rgba(18, 18, 20, 0.16);
-        --ip-glass-highlight: rgba(255, 255, 255, 0.8);
-        --ip-glass-backdrop: rgba(10, 10, 12, 0.2);
-        --ip-glass-image-backdrop: rgba(0, 0, 0, 0.08);
-        --ip-glass-toast: rgba(255, 255, 255, 0.72);
-        --ip-glass-accent: rgba(0, 122, 255, 0.85);
+        --hz-text: rgba(24, 24, 28, 0.92);
+        --hz-text-muted: rgba(24, 24, 28, 0.68);
+        --hz-surface: rgba(255, 255, 255, 0.72);
+        --hz-surface-strong: rgba(255, 255, 255, 0.84);
+        --hz-surface-soft: rgba(255, 255, 255, 0.56);
+        --hz-border: rgba(255, 255, 255, 0.72);
+        --hz-border-soft: rgba(0, 0, 0, 0.08);
+        --hz-shadow:
+          0 20px 50px rgba(15, 15, 18, 0.18),
+          0 4px 14px rgba(15, 15, 18, 0.1);
+        --hz-backdrop: rgba(10, 10, 14, 0.26);
+        --hz-image-bg: rgba(0, 0, 0, 0.08);
+        --hz-accent: rgba(0, 122, 255, 0.88);
+        --hz-danger: rgba(255, 59, 48, 0.18);
+        --hz-danger-border: rgba(255, 59, 48, 0.3);
       }
+
       @media (prefers-color-scheme: dark) {
         :root {
-          --ip-glass-text: rgba(245, 245, 247, 0.92);
-          --ip-glass-text-muted: rgba(245, 245, 247, 0.7);
-          --ip-glass-surface: rgba(28, 28, 32, 0.6);
-          --ip-glass-surface-strong: rgba(34, 34, 38, 0.7);
-          --ip-glass-surface-soft: rgba(24, 24, 28, 0.44);
-          --ip-glass-border: rgba(255, 255, 255, 0.26);
-          --ip-glass-border-outer: rgba(255, 255, 255, 0.33);
-          --ip-glass-border-outer-soft: rgba(255, 255, 255, 0.22);
-          --ip-glass-border-soft: rgba(255, 255, 255, 0.1);
-          --ip-glass-border-hairline: rgba(0, 0, 0, 0.55);
-          --ip-glass-shadow:
-            0 28px 70px rgba(0, 0, 0, 0.42),
-            0 4px 12px rgba(0, 0, 0, 0.28);
-          --ip-glass-shadow-soft: 0 12px 30px rgba(0, 0, 0, 0.48);
-          --ip-glass-highlight: rgba(255, 255, 255, 0.24);
-          --ip-glass-backdrop: rgba(5, 5, 7, 0.38);
-          --ip-glass-image-backdrop: rgba(0, 0, 0, 0.35);
-          --ip-glass-toast: rgba(32, 32, 36, 0.8);
-          --ip-glass-accent: rgba(10, 132, 255, 0.9);
+          --hz-text: rgba(245, 245, 247, 0.94);
+          --hz-text-muted: rgba(245, 245, 247, 0.7);
+          --hz-surface: rgba(28, 28, 34, 0.74);
+          --hz-surface-strong: rgba(36, 36, 42, 0.84);
+          --hz-surface-soft: rgba(24, 24, 30, 0.58);
+          --hz-border: rgba(255, 255, 255, 0.2);
+          --hz-border-soft: rgba(255, 255, 255, 0.08);
+          --hz-shadow:
+            0 24px 60px rgba(0, 0, 0, 0.44),
+            0 4px 14px rgba(0, 0, 0, 0.28);
+          --hz-backdrop: rgba(5, 5, 8, 0.42);
+          --hz-image-bg: rgba(0, 0, 0, 0.34);
+          --hz-accent: rgba(10, 132, 255, 0.9);
+          --hz-danger: rgba(255, 69, 58, 0.22);
+          --hz-danger-border: rgba(255, 69, 58, 0.34);
         }
       }
-      #ip-popout-overlay {
+
+      #${IDS.overlay} {
         position: fixed;
         inset: 0;
         z-index: 2147483647;
         display: none;
+        color: var(--hz-text);
         color-scheme: light dark;
       }
-      #ip-popout-overlay.ip-open { display: block; }
-      #ip-popout-backdrop {
+
+      #${IDS.overlay}.is-open {
+        display: block;
+      }
+
+      #${IDS.backdrop} {
         position: absolute;
         inset: 0;
-        background: var(--ip-glass-backdrop);
-        backdrop-filter: blur(18px) saturate(160%);
-        -webkit-backdrop-filter: blur(18px) saturate(160%);
+        background: var(--hz-backdrop);
+        backdrop-filter: blur(14px) saturate(140%);
+        -webkit-backdrop-filter: blur(14px) saturate(140%);
       }
-      #ip-popout-window {
+
+      #${IDS.window} {
         position: absolute;
-        isolation: isolate;
-        background: var(--ip-glass-surface);
-        color: var(--ip-glass-text);
-        border-radius: var(--ip-glass-radius-xl);
-        box-shadow: var(--ip-glass-shadow),
-          var(--ip-glass-shadow-soft),
-          0 0 0 0.5px var(--ip-glass-border-hairline),
-          inset 0 1px 0 var(--ip-glass-highlight);
         overflow: hidden;
-        border: 1px solid transparent;
-        backdrop-filter: blur(var(--ip-glass-blur))
-          saturate(var(--ip-glass-sat));
-        -webkit-backdrop-filter: blur(var(--ip-glass-blur))
-          saturate(var(--ip-glass-sat));
+        border-radius: 16px;
+        border: 1px solid var(--hz-border);
+        background: var(--hz-surface);
+        box-shadow: var(--hz-shadow);
+        backdrop-filter: blur(12px) saturate(150%);
+        -webkit-backdrop-filter: blur(12px) saturate(150%);
       }
-      #ip-popout-window::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        border-radius: inherit;
-        padding: 1px;
-        background:
-          radial-gradient(
-            120% 78% at 10% -12%,
-            color-mix(in srgb, var(--ip-glass-highlight) 70%, transparent),
-            transparent 46%
-          ),
-          radial-gradient(
-            118% 80% at 92% 114%,
-            color-mix(in srgb, var(--ip-glass-border-outer-soft) 85%, transparent),
-            transparent 52%
-          ),
-          linear-gradient(
-            155deg,
-            color-mix(in srgb, var(--ip-glass-highlight) 48%, var(--ip-glass-border-outer)),
-            var(--ip-glass-border-outer) 45%,
-            var(--ip-glass-border-outer-soft)
-          );
-        -webkit-mask:
-          linear-gradient(#000 0 0) content-box,
-          linear-gradient(#000 0 0);
-        -webkit-mask-composite: xor;
-        mask:
-          linear-gradient(#000 0 0) content-box,
-          linear-gradient(#000 0 0);
-        mask-composite: exclude;
-        box-shadow:
-          inset 0 1px 0 color-mix(in srgb, var(--ip-glass-highlight) 68%, transparent),
-          inset 0 -1px 0 color-mix(in srgb, var(--ip-glass-border-outer-soft) 88%, transparent);
-        pointer-events: none;
-      }
-      #ip-popout-titlebar {
-        height: 44px;
+
+      #${IDS.titlebar} {
+        height: ${CONFIG.popout.titlebarHeight}px;
         display: flex;
         align-items: center;
         gap: 8px;
         padding: 0 12px;
+        border-bottom: 1px solid var(--hz-border-soft);
         background: linear-gradient(
           180deg,
-          var(--ip-glass-surface-strong),
-          var(--ip-glass-surface)
+          var(--hz-surface-strong),
+          var(--hz-surface)
         );
-        border-bottom: 1px solid var(--ip-glass-border-soft);
-        user-select: none;
         cursor: move;
-        position: relative;
-        backdrop-filter: blur(14px) saturate(170%);
-        -webkit-backdrop-filter: blur(14px) saturate(170%);
+        user-select: none;
       }
-      #ip-popout-titlebar::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background: linear-gradient(
-          180deg,
-          var(--ip-glass-highlight),
-          transparent
-        );
-        opacity: 0.5;
-        pointer-events: none;
-      }
-      #ip-popout-titlebar > * {
-        position: relative;
-        z-index: 1;
-      }
-      #ip-popout-title {
+
+      #${IDS.title} {
         flex: 1;
-        font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        color: var(--ip-glass-text);
-        letter-spacing: 0.01em;
-        opacity: 0.92;
+        min-width: 0;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
-      .ip-btn {
+
+      .hz-btn {
         appearance: none;
-        border: 1px solid var(--ip-glass-border);
-        background: var(--ip-glass-surface-soft);
-        color: var(--ip-glass-text);
-        border-radius: var(--ip-glass-radius-sm);
+        border: 1px solid var(--hz-border);
+        background: var(--hz-surface-soft);
+        color: var(--hz-text);
+        border-radius: 9px;
         padding: 6px 10px;
-        font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         cursor: pointer;
-        backdrop-filter: blur(10px) saturate(160%);
-        -webkit-backdrop-filter: blur(10px) saturate(160%);
-        box-shadow: inset 0 1px 0 var(--ip-glass-highlight),
-          0 1px 2px rgba(0, 0, 0, 0.12);
-        transition: background 120ms ease,
-          box-shadow 120ms ease,
-          transform 80ms ease;
       }
-      .ip-btn:hover { background: var(--ip-glass-surface-strong); }
-      .ip-btn:active {
-        transform: translateY(1px) scale(0.98);
-        box-shadow: inset 0 1px 0 var(--ip-glass-highlight);
+
+      .hz-btn:hover {
+        background: var(--hz-surface-strong);
       }
-      .ip-btn:focus-visible {
-        outline: 2px solid var(--ip-glass-accent);
+
+      .hz-btn:focus-visible {
+        outline: 2px solid var(--hz-accent);
         outline-offset: 1px;
       }
-      #ip-popout-close {
+
+      #hz-close-btn {
         width: 28px;
         height: 28px;
-        text-align: center;
         padding: 0;
-        font-weight: 600;
         border-radius: 999px;
+        font-weight: 700;
       }
-      #ip-popout-close:hover {
-        background: var(--ip-glass-danger, rgba(255, 59, 48, 0.22));
-        border-color: var(--ip-glass-danger-border, rgba(255, 59, 48, 0.35));
+
+      #hz-close-btn:hover {
+        background: var(--hz-danger);
+        border-color: var(--hz-danger-border);
       }
-      #ip-popout-body {
+
+      #hz-body {
         width: 100%;
-        height: calc(100% - 44px);
-        background: var(--ip-glass-image-backdrop);
+        height: calc(100% - ${CONFIG.popout.titlebarHeight}px);
+        background: var(--hz-image-bg);
       }
-      #ip-popout-img {
+
+      #${IDS.popoutImg} {
         width: 100%;
         height: 100%;
         display: block;
         object-fit: contain;
-        background: var(--ip-glass-image-backdrop);
+        background: var(--hz-image-bg);
       }
-      #ip-popout-resize {
+
+      #${IDS.resize} {
         position: absolute;
         right: 0;
         bottom: 0;
         width: 18px;
         height: 18px;
         cursor: nwse-resize;
-        background:
-          linear-gradient(
-            135deg,
-            transparent 52%,
-            color-mix(in srgb, transparent 55%, var(--ip-glass-highlight)) 52%
-          ),
-          linear-gradient(
-            135deg,
-            transparent 68%,
-            color-mix(in srgb, transparent 72%, var(--ip-glass-highlight)) 68%
-          ),
-          linear-gradient(
-            135deg,
-            transparent 82%,
-            color-mix(in srgb, transparent 82%, var(--ip-glass-highlight)) 82%
-          );
-        background-size: 18px 18px;
-        background-repeat: no-repeat;
         opacity: 0.55;
-        filter: drop-shadow(0 1px 0 var(--ip-glass-highlight));
+        background:
+          linear-gradient(135deg, transparent 50%, rgba(255, 255, 255, 0.65) 50%),
+          linear-gradient(135deg, transparent 68%, rgba(255, 255, 255, 0.55) 68%),
+          linear-gradient(135deg, transparent 84%, rgba(255, 255, 255, 0.45) 84%);
       }
-      #ip-popout-toast {
-        position: absolute;
-        left: 50%;
-        bottom: 18px;
-        transform: translateX(-50%);
-        background: var(--ip-glass-toast);
-        color: var(--ip-glass-text);
-        border: 1px solid var(--ip-glass-border);
-        border-radius: 999px;
-        padding: 8px 12px;
-        font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        box-shadow: var(--ip-glass-shadow);
-        backdrop-filter: blur(16px) saturate(160%);
-        -webkit-backdrop-filter: blur(16px) saturate(160%);
+
+      #${IDS.popoutToast},
+      #${IDS.hoverToast} {
+        position: fixed;
+        z-index: 2147483647;
+        padding: 8px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--hz-border);
+        background: var(--hz-surface-strong);
+        color: var(--hz-text);
+        font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        box-shadow: var(--hz-shadow);
+        backdrop-filter: blur(12px) saturate(150%);
+        -webkit-backdrop-filter: blur(12px) saturate(150%);
         opacity: 0;
-        transition: opacity 140ms ease;
+        transform: translateY(6px);
+        transition: opacity 120ms ease, transform 120ms ease;
         pointer-events: none;
       }
-      #ip-popout-toast.ip-show { opacity: 1; }
+
+      #${IDS.popoutToast}.is-visible,
+      #${IDS.hoverToast}.is-visible {
+        opacity: 1;
+        transform: translateY(0);
+      }
+
+      #${IDS.popoutToast} {
+        left: 50%;
+        bottom: 20px;
+        transform: translateX(-50%) translateY(6px);
+      }
+
+      #${IDS.popoutToast}.is-visible {
+        transform: translateX(-50%) translateY(0);
+      }
+
+      #${IDS.hoverWrap} {
+        position: fixed;
+        left: 0;
+        top: 0;
+        z-index: 2147483646;
+        display: none;
+        pointer-events: none;
+        padding: ${CONFIG.hover.padding}px;
+        border-radius: ${CONFIG.hover.borderRadius}px;
+        border: ${CONFIG.hover.borderWidth}px solid var(--hz-border);
+        background: var(--hz-surface-soft);
+        box-shadow: var(--hz-shadow);
+        backdrop-filter: blur(14px) saturate(150%);
+        -webkit-backdrop-filter: blur(14px) saturate(150%);
+        transform: translate3d(-9999px, -9999px, 0);
+        will-change: transform;
+      }
+
+      #${IDS.hoverImg} {
+        display: block;
+        max-width: none;
+        max-height: none;
+        border-radius: ${CONFIG.hover.borderRadius - 6}px;
+        background: var(--hz-image-bg);
+        box-shadow: inset 0 0 0 1px var(--hz-border-soft);
+      }
+
+      #${IDS.hoverBadge} {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        display: none;
+        padding: 4px 7px;
+        border-radius: 999px;
+        border: 1px solid var(--hz-border);
+        background: var(--hz-surface-strong);
+        color: var(--hz-text);
+        font: 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: 0.06em;
+      }
+
+      #${IDS.hoverToast} {
+        left: 14px;
+        bottom: 14px;
+      }
     `;
-    document.documentElement.appendChild(style);
+
+    (document.head || document.documentElement).appendChild(style);
   }
 
   function buildUi() {
-    if (STATE.overlay) return;
-    ensureStyles();
+    const mount = document.body || document.documentElement;
 
     const overlay = document.createElement("div");
-    overlay.id = "ip-popout-overlay";
+    overlay.id = IDS.overlay;
 
     const backdrop = document.createElement("div");
-    backdrop.id = "ip-popout-backdrop";
+    backdrop.id = IDS.backdrop;
 
-    const win = document.createElement("div");
-    win.id = "ip-popout-window";
-    win.setAttribute("role", "dialog");
-    win.setAttribute("aria-modal", "true");
+    const popoutWindow = document.createElement("div");
+    popoutWindow.id = IDS.window;
+    popoutWindow.setAttribute("role", "dialog");
+    popoutWindow.setAttribute("aria-modal", "true");
+    popoutWindow.setAttribute("aria-label", "Image popout");
 
     const titlebar = document.createElement("div");
-    titlebar.id = "ip-popout-titlebar";
+    titlebar.id = IDS.titlebar;
 
     const title = document.createElement("div");
-    title.id = "ip-popout-title";
+    title.id = IDS.title;
     title.textContent = "Image Popout";
 
-    const btnCopy = document.createElement("button");
-    btnCopy.type = "button";
-    btnCopy.className = "ip-btn";
-    btnCopy.textContent = "Copy URL";
-    btnCopy.dataset.action = "copy";
-
-    const btnOpen = document.createElement("button");
-    btnOpen.type = "button";
-    btnOpen.className = "ip-btn";
-    btnOpen.textContent = "Open";
-    btnOpen.dataset.action = "open";
-
-    const btnClose = document.createElement("button");
-    btnClose.type = "button";
-    btnClose.className = "ip-btn";
-    btnClose.id = "ip-popout-close";
-    btnClose.textContent = "×";
-    btnClose.dataset.action = "close";
-    btnClose.setAttribute("aria-label", "Close");
+    const copyBtn = buildButton("Copy URL", "copy");
+    const openBtn = buildButton("Open", "open");
+    const closeBtn = buildButton("×", "close");
+    closeBtn.id = "hz-close-btn";
+    closeBtn.setAttribute("aria-label", "Close");
 
     const body = document.createElement("div");
-    body.id = "ip-popout-body";
+    body.id = "hz-body";
 
-    const img = document.createElement("img");
-    img.id = "ip-popout-img";
-    img.alt = "";
-    img.decoding = "async";
+    const popoutImg = document.createElement("img");
+    popoutImg.id = IDS.popoutImg;
+    popoutImg.alt = "";
+    popoutImg.decoding = "async";
 
     const resize = document.createElement("div");
-    resize.id = "ip-popout-resize";
+    resize.id = IDS.resize;
     resize.setAttribute("role", "presentation");
 
-    const toast = document.createElement("div");
-    toast.id = "ip-popout-toast";
-    toast.textContent = "";
+    const popoutToast = document.createElement("div");
+    popoutToast.id = IDS.popoutToast;
 
-    body.appendChild(img);
-    titlebar.appendChild(title);
-    titlebar.appendChild(btnCopy);
-    titlebar.appendChild(btnOpen);
-    titlebar.appendChild(btnClose);
+    titlebar.append(title, copyBtn, openBtn, closeBtn);
+    body.appendChild(popoutImg);
+    popoutWindow.append(titlebar, body, resize);
+    overlay.append(backdrop, popoutWindow, popoutToast);
 
-    win.appendChild(titlebar);
-    win.appendChild(body);
-    win.appendChild(resize);
+    const hoverWrap = document.createElement("div");
+    hoverWrap.id = IDS.hoverWrap;
 
-    overlay.appendChild(backdrop);
-    overlay.appendChild(win);
-    overlay.appendChild(toast);
+    const hoverImg = document.createElement("img");
+    hoverImg.id = IDS.hoverImg;
+    hoverImg.alt = "";
+    hoverImg.decoding = "async";
+    hoverImg.loading = "eager";
 
-    overlay.addEventListener("click", (event) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
+    const hoverBadge = document.createElement("div");
+    hoverBadge.id = IDS.hoverBadge;
+    hoverBadge.textContent = "PINNED";
 
-      if (target.id === "ip-popout-backdrop") {
-        closePopout();
+    const hoverToast = document.createElement("div");
+    hoverToast.id = IDS.hoverToast;
+
+    hoverWrap.append(hoverImg, hoverBadge);
+    mount.append(overlay, hoverWrap, hoverToast);
+
+    state.ui.overlay = overlay;
+    state.ui.popoutWindow = popoutWindow;
+    state.ui.popoutTitle = title;
+    state.ui.popoutImg = popoutImg;
+    state.ui.popoutToast = popoutToast;
+    state.ui.hoverWrap = hoverWrap;
+    state.ui.hoverImg = hoverImg;
+    state.ui.hoverBadge = hoverBadge;
+    state.ui.hoverToast = hoverToast;
+
+    overlay.addEventListener("click", onOverlayClick);
+    titlebar.addEventListener("pointerdown", startPopoutDrag, {
+      passive: false,
+    });
+    resize.addEventListener("pointerdown", startPopoutResize, {
+      passive: false,
+    });
+  }
+
+  function buildButton(label, action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "hz-btn";
+    button.dataset.action = action;
+    button.textContent = label;
+    return button;
+  }
+
+  function bindEvents() {
+    document.addEventListener("mousemove", onDocumentMouseMove, {
+      capture: true,
+      passive: true,
+    });
+    document.addEventListener("click", onDocumentClick, true);
+    window.addEventListener("keydown", onWindowKeyDown, true);
+    window.addEventListener("pointermove", onWindowPointerMove, true);
+    window.addEventListener("pointerup", onWindowPointerUp, true);
+    window.addEventListener("resize", onViewportChange, { passive: true });
+    window.addEventListener("scroll", onViewportChange, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("blur", onWindowBlur);
+    document.addEventListener("mouseleave", onDocumentMouseLeave, true);
+  }
+
+  function onOverlayClick(event) {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+
+    if (target.id === IDS.backdrop) {
+      closePopout();
+      return;
+    }
+
+    const action = target.closest("[data-action]")?.getAttribute("data-action");
+    if (action === "close") closePopout();
+    if (action === "open") openPopoutUrlInNewTab();
+    if (action === "copy") copyPopoutUrl();
+  }
+
+  function onDocumentClick(event) {
+    if (!(event instanceof MouseEvent)) return;
+    if (event.button !== 0) return;
+
+    if (event.altKey) {
+      handleAltClick(event);
+      return;
+    }
+
+    handlePinClick(event);
+  }
+
+  function onDocumentMouseMove(event) {
+    state.hover.mouseX = event.clientX;
+    state.hover.mouseY = event.clientY;
+
+    if (!state.hover.enabled || state.popout.open || state.hover.pinned) return;
+
+    if (event.target !== state.hover.lastEventTarget) {
+      state.hover.lastEventTarget = event.target;
+      const candidate = findImageCandidate(event.target);
+      if (candidate && isTargetLargeEnough(candidate.element)) {
+        activateHover(candidate, event.clientX, event.clientY);
+      } else if (
+        state.hover.target &&
+        !pointWithinElement(
+          state.hover.target,
+          event.clientX,
+          event.clientY,
+        )
+      ) {
+        hideHover();
         return;
       }
-
-      const action = target
-        .closest("[data-action]")
-        ?.getAttribute("data-action");
-      if (action === "close") closePopout();
-      if (action === "open") openInNewTab();
-      if (action === "copy") copyUrlToClipboard();
-    });
-
-    titlebar.addEventListener("pointerdown", startDrag, { passive: false });
-    resize.addEventListener("pointerdown", startResize, { passive: false });
-
-    document.documentElement.appendChild(overlay);
-
-    STATE.overlay = overlay;
-    STATE.popout = win;
-    STATE.titlebar = titlebar;
-    STATE.img = img;
-    STATE.title = title;
-  }
-
-  let popoutToastTimer = 0;
-  function showPopoutToast(message) {
-    const toast = document.getElementById("ip-popout-toast");
-    if (!toast) return;
-    toast.textContent = message;
-    toast.classList.add("ip-show");
-    window.clearTimeout(popoutToastTimer);
-    popoutToastTimer = window.setTimeout(
-      () => toast.classList.remove("ip-show"),
-      1200,
-    );
-  }
-
-  function openInNewTab() {
-    if (!STATE.lastUrl) return;
-    window.open(STATE.lastUrl, "_blank", "noopener,noreferrer");
-  }
-
-  async function copyUrlToClipboard() {
-    if (!STATE.lastUrl) return;
-    try {
-      await navigator.clipboard.writeText(STATE.lastUrl);
-      showPopoutToast("Copied URL");
-    } catch {
-      // Fallback: prompt (works on most pages even when Clipboard API is restricted)
-      window.prompt("Copy image URL:", STATE.lastUrl);
-    }
-  }
-
-  function maximizePopoutToViewport() {
-    if (!STATE.popout) return;
-    const { width: vw, height: vh } = getViewport();
-    const padding = OPTIONS.viewportPadding;
-    const winW = Math.max(1, Math.floor(vw - padding * 2));
-    const winH = Math.max(1, Math.floor(vh - padding * 2));
-
-    STATE.popout.style.left = `${padding}px`;
-    STATE.popout.style.top = `${padding}px`;
-    STATE.popout.style.width = `${winW}px`;
-    STATE.popout.style.height = `${winH}px`;
-  }
-
-  function openPopout(url) {
-    buildUi();
-    if (!STATE.overlay || !STATE.popout || !STATE.img || !STATE.title) return;
-
-    STATE.lastUrl = url;
-    STATE.title.textContent = url;
-    STATE.popoutAutoFit = true;
-
-    maximizePopoutToViewport();
-
-    STATE.overlay.classList.add("ip-open");
-
-    // Load image
-    const img = STATE.img;
-    img.src = "";
-    img.src = url;
-
-    img.onload = () => clampPopoutToViewport();
-
-    img.onerror = () => showPopoutToast("Failed to load image");
-  }
-
-  function closePopout() {
-    if (!STATE.overlay) return;
-    STATE.overlay.classList.remove("ip-open");
-  }
-
-  function clampPopoutToViewport() {
-    if (!STATE.overlay || !STATE.popout) return;
-    if (!STATE.overlay.classList.contains("ip-open")) return;
-
-    const popout = STATE.popout;
-    const { width: vw, height: vh } = getViewport();
-    const padding = OPTIONS.viewportPadding;
-
-    const rect = popout.getBoundingClientRect();
-    const maxW = Math.max(1, Math.floor(vw - padding * 2));
-    const maxH = Math.max(1, Math.floor(vh - padding * 2));
-
-    const nextW = clamp(rect.width, 1, maxW);
-    const nextH = clamp(rect.height, 1, maxH);
-
-    let left = Number.parseFloat(popout.style.left);
-    let top = Number.parseFloat(popout.style.top);
-    if (!Number.isFinite(left)) left = rect.left;
-    if (!Number.isFinite(top)) top = rect.top;
-
-    left = clamp(left, padding, Math.max(padding, vw - nextW - padding));
-    top = clamp(top, padding, Math.max(padding, vh - nextH - padding));
-
-    popout.style.left = `${Math.floor(left)}px`;
-    popout.style.top = `${Math.floor(top)}px`;
-    popout.style.width = `${Math.floor(nextW)}px`;
-    popout.style.height = `${Math.floor(nextH)}px`;
-  }
-
-  function startDrag(event) {
-    if (!(event instanceof PointerEvent)) return;
-    if (event.button !== 0) return;
-
-    const titlebar = event.currentTarget;
-    if (!(titlebar instanceof Element)) return;
-
-    const downTarget = event.target;
-    if (downTarget instanceof Element && downTarget.closest(".ip-btn")) return;
-
-    event.preventDefault();
-    STATE.popoutAutoFit = false;
-
-    const pointerId = event.pointerId;
-    try {
-      titlebar.setPointerCapture(pointerId);
-    } catch {}
-
-    if (!STATE.popout) return;
-    const popout = STATE.popout;
-
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startLeft = Number.parseFloat(popout.style.left) || 0;
-    const startTop = Number.parseFloat(popout.style.top) || 0;
-
-    const onMove = (moveEvent) => {
-      if (!(moveEvent instanceof PointerEvent)) return;
-      const { width: vw, height: vh } = getViewport();
-      const padding = OPTIONS.viewportPadding;
-      const rect = popout.getBoundingClientRect();
-
-      const nextLeft = clamp(
-        startLeft + (moveEvent.clientX - startX),
-        padding,
-        Math.max(padding, vw - rect.width - padding),
-      );
-      const nextTop = clamp(
-        startTop + (moveEvent.clientY - startY),
-        padding,
-        Math.max(padding, vh - rect.height - padding),
-      );
-
-      popout.style.left = `${nextLeft}px`;
-      popout.style.top = `${nextTop}px`;
-    };
-
-    const onUp = () => {
-      try {
-        titlebar.releasePointerCapture(pointerId);
-      } catch {}
-      window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", onUp, true);
-      document.documentElement.style.userSelect = "";
-    };
-
-    document.documentElement.style.userSelect = "none";
-    window.addEventListener("pointermove", onMove, true);
-    window.addEventListener("pointerup", onUp, true);
-  }
-
-  function startResize(event) {
-    if (!(event instanceof PointerEvent)) return;
-    if (event.button !== 0) return;
-    event.preventDefault();
-    STATE.popoutAutoFit = false;
-
-    const handle = event.currentTarget;
-    const pointerId = event.pointerId;
-    if (handle instanceof Element) {
-      try {
-        handle.setPointerCapture(pointerId);
-      } catch {}
     }
 
-    if (!STATE.popout) return;
-    const popout = STATE.popout;
+    if (!state.hover.target) return;
 
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const rect = popout.getBoundingClientRect();
-    const startW = rect.width;
-    const startH = rect.height;
-    const startLeft = rect.left;
-    const startTop = rect.top;
-
-    const onMove = (moveEvent) => {
-      if (!(moveEvent instanceof PointerEvent)) return;
-      const { width: vw, height: vh } = getViewport();
-      const padding = OPTIONS.viewportPadding;
-
-      const maxW = Math.max(1, vw - startLeft - padding);
-      const maxH = Math.max(1, vh - startTop - padding);
-      const minW = maxW >= OPTIONS.minWidth ? OPTIONS.minWidth : 1;
-      const minH = maxH >= OPTIONS.minHeight ? OPTIONS.minHeight : 1;
-
-      const nextW = clamp(startW + (moveEvent.clientX - startX), minW, maxW);
-      const nextH = clamp(startH + (moveEvent.clientY - startY), minH, maxH);
-
-      popout.style.width = `${Math.floor(nextW)}px`;
-      popout.style.height = `${Math.floor(nextH)}px`;
-    };
-
-    const onUp = () => {
-      if (handle instanceof Element) {
-        try {
-          handle.releasePointerCapture(pointerId);
-        } catch {}
+    if (
+      !pointWithinElement(state.hover.target, event.clientX, event.clientY)
+    ) {
+      const candidate = findImageCandidate(document.elementFromPoint(
+        event.clientX,
+        event.clientY,
+      ));
+      if (candidate && isTargetLargeEnough(candidate.element)) {
+        activateHover(candidate, event.clientX, event.clientY);
+      } else {
+        hideHover();
       }
-      window.removeEventListener("pointermove", onMove, true);
-      window.removeEventListener("pointerup", onUp, true);
-      document.documentElement.style.userSelect = "";
-    };
-
-    document.documentElement.style.userSelect = "none";
-    window.addEventListener("pointermove", onMove, true);
-    window.addEventListener("pointerup", onUp, true);
-  }
-
-  // ----- Hover preview -----
-  const HOVER_STORE_KEY = "img_popout_safari_v1";
-  const HOVER_DEFAULTS = {
-    enabled: true,
-    pinned: false,
-    offset: 16,
-    maxViewportFrac: 1.0,
-    borderRadius: 14,
-  };
-
-  const HOVER_VIEWPORT_PAD = 8;
-  const HOVER_WRAP_PADDING = 10; // keep in sync with hoverWrap styles
-  const HOVER_WRAP_BORDER = 1; // keep in sync with hoverWrap styles
-  const HOVER_WRAP_CHROME = HOVER_WRAP_PADDING * 2 + HOVER_WRAP_BORDER * 2;
-  const HOVER_FOLLOW_IDLE_MS = 120;
-
-  function loadHoverState() {
-    try {
-      const raw = localStorage.getItem(HOVER_STORE_KEY);
-      if (!raw) return { ...HOVER_DEFAULTS };
-      return { ...HOVER_DEFAULTS, ...JSON.parse(raw) };
-    } catch {
-      return { ...HOVER_DEFAULTS };
-    }
-  }
-
-  const hoverState = loadHoverState();
-
-  function saveHoverState() {
-    try {
-      localStorage.setItem(
-        HOVER_STORE_KEY,
-        JSON.stringify({
-          enabled: hoverState.enabled,
-          pinned: hoverState.pinned,
-        }),
-      );
-    } catch {}
-  }
-
-  const hoverWrap = document.createElement("div");
-  hoverWrap.id = "ip-hover-wrap";
-  hoverWrap.style.cssText = [
-    "position:fixed",
-    "left:0",
-    "top:0",
-    "transform: translate3d(-9999px, -9999px, 0)",
-    "will-change: transform",
-    // Keep below the modal overlay.
-    "z-index:2147483646",
-    "display:none",
-    "pointer-events:none",
-    "background: var(--ip-glass-surface-soft)",
-    "backdrop-filter: blur(18px) saturate(160%)",
-    "-webkit-backdrop-filter: blur(18px) saturate(160%)",
-    `border:${HOVER_WRAP_BORDER}px solid var(--ip-glass-border)`,
-    "box-shadow: var(--ip-glass-shadow)",
-    `border-radius:${HOVER_DEFAULTS.borderRadius}px`,
-    `padding:${HOVER_WRAP_PADDING}px`,
-  ].join(";");
-
-  const hoverImg = document.createElement("img");
-  hoverImg.alt = "";
-  hoverImg.decoding = "async";
-  hoverImg.loading = "eager";
-  hoverImg.style.cssText = [
-    "display:block",
-    "max-width: none",
-    "max-height: none",
-    `border-radius:${HOVER_DEFAULTS.borderRadius - 6}px`,
-    "background: var(--ip-glass-image-backdrop)",
-    "box-shadow: inset 0 0 0 1px var(--ip-glass-border-soft)",
-  ].join(";");
-
-  const hoverBadge = document.createElement("div");
-  hoverBadge.style.cssText = [
-    "position:absolute",
-    "right:10px",
-    "top:10px",
-    "padding:4px 7px",
-    "border-radius:999px",
-    "font: 12px -apple-system, BlinkMacSystemFont, sans-serif",
-    "color: var(--ip-glass-text)",
-    "background: var(--ip-glass-surface-strong)",
-    "border: 1px solid var(--ip-glass-border)",
-    "backdrop-filter: blur(12px) saturate(160%)",
-    "-webkit-backdrop-filter: blur(12px) saturate(160%)",
-    "box-shadow: var(--ip-glass-shadow-soft)",
-    "letter-spacing: 0.04em",
-    "display:none",
-  ].join(";");
-  hoverBadge.textContent = "PINNED";
-
-  hoverWrap.appendChild(hoverImg);
-  hoverWrap.appendChild(hoverBadge);
-  document.documentElement.appendChild(hoverWrap);
-
-  const hoverToast = document.createElement("div");
-  hoverToast.id = "ip-hover-toast";
-  hoverToast.style.cssText = [
-    "position: fixed",
-    "left: 14px",
-    "bottom: 14px",
-    "z-index: 2147483646",
-    "padding: 8px 10px",
-    "border-radius: 12px",
-    "background: var(--ip-glass-toast)",
-    "color: var(--ip-glass-text)",
-    "font: 12px -apple-system, BlinkMacSystemFont, sans-serif",
-    "box-shadow: var(--ip-glass-shadow)",
-    "border: 1px solid var(--ip-glass-border)",
-    "backdrop-filter: blur(16px) saturate(160%)",
-    "-webkit-backdrop-filter: blur(16px) saturate(160%)",
-    "opacity: 0",
-    "transform: translateY(6px)",
-    "transition: opacity 140ms ease, transform 140ms ease",
-    "pointer-events: none",
-  ].join(";");
-  document.documentElement.appendChild(hoverToast);
-
-  let hoverToastTimer = 0;
-  function showHoverToast(message) {
-    hoverToast.textContent = message;
-    hoverToast.style.opacity = "1";
-    hoverToast.style.transform = "translateY(0px)";
-    window.clearTimeout(hoverToastTimer);
-    hoverToastTimer = window.setTimeout(() => {
-      hoverToast.style.opacity = "0";
-      hoverToast.style.transform = "translateY(6px)";
-    }, 900);
-  }
-
-  const hoverActive = {
-    el: null,
-    url: "",
-    lastMouse: { x: 0, y: 0 },
-    natural: { w: 0, h: 0 },
-  };
-  const hoverLayout = {
-    wrapW: 300,
-    wrapH: 300,
-    lastMoveAt: 0,
-    lastFrameMouseX: Number.NaN,
-    lastFrameMouseY: Number.NaN,
-  };
-
-  let hoverMoveRaf = 0;
-  function stopHoverFollowLoop() {
-    if (!hoverMoveRaf) return;
-    window.cancelAnimationFrame(hoverMoveRaf);
-    hoverMoveRaf = 0;
-  }
-
-  function runHoverFollowLoop() {
-    hoverMoveRaf = 0;
-
-    if (!hoverState.enabled) return;
-    if (!hoverActive.el) return;
-    if (hoverState.pinned) return;
-    if (hoverWrap.style.display !== "block") return;
-
-    const now = performance.now();
-    if (now - hoverLayout.lastMoveAt > HOVER_FOLLOW_IDLE_MS) return;
-
-    const x = hoverActive.lastMouse.x;
-    const y = hoverActive.lastMouse.y;
-    const moved =
-      x !== hoverLayout.lastFrameMouseX || y !== hoverLayout.lastFrameMouseY;
-
-    if (!moved) {
-      hoverMoveRaf = window.requestAnimationFrame(runHoverFollowLoop);
       return;
     }
 
-    const rect = hoverActive.el.getBoundingClientRect();
-
-    const inside =
-      x >= rect.left &&
-      x <= rect.right &&
-      y >= rect.top &&
-      y <= rect.bottom;
-
-    if (!inside) {
-      hideHoverWrap();
-      return;
-    }
-
-    updateHoverPosition(x, y);
-    hoverLayout.lastFrameMouseX = x;
-    hoverLayout.lastFrameMouseY = y;
-    hoverMoveRaf = window.requestAnimationFrame(runHoverFollowLoop);
+    updateHoverPosition(event.clientX, event.clientY);
   }
 
-  function startHoverFollowLoop() {
-    if (hoverMoveRaf) return;
-    if (!hoverState.enabled) return;
-    if (!hoverActive.el) return;
-    if (hoverState.pinned) return;
-    if (hoverWrap.style.display !== "block") return;
-    hoverMoveRaf = window.requestAnimationFrame(runHoverFollowLoop);
-  }
-
-  function showHoverWrap() {
-    hoverWrap.style.display = "block";
-    hoverBadge.style.display = hoverState.pinned ? "block" : "none";
-  }
-
-  function hideHoverWrap() {
-    stopHoverFollowLoop();
-    hoverWrap.style.display = "none";
-    hoverWrap.style.transform = "translate3d(-9999px, -9999px, 0)";
-    hoverActive.el = null;
-    hoverActive.url = "";
-    hoverLayout.lastFrameMouseX = Number.NaN;
-    hoverLayout.lastFrameMouseY = Number.NaN;
-  }
-
-  function hoverTargetIsTooSmall(el) {
-    const rect = el.getBoundingClientRect?.();
-    if (!rect) return true;
-    return rect.width < 48 || rect.height < 48;
-  }
-
-  function findHoverZoomableTarget(startEl) {
-    if (!(startEl instanceof Element)) return null;
-    if (startEl === hoverWrap || hoverWrap.contains(startEl)) return null;
-    if (startEl === hoverToast || hoverToast.contains(startEl)) return null;
-    if (startEl.closest?.("#ip-popout-overlay")) return null;
-
-    const imgEl = startEl.closest?.("img");
-    if (imgEl) return imgEl;
-
-    const el = startEl.closest?.("div,span,a,button,figure,section");
-    if (!el) return null;
-
-    const bg = getBackgroundImageUrl(el);
-    if (bg) return el;
-
-    return null;
-  }
-
-  function computeHoverFitSize(naturalW, naturalH) {
-    const { width: vw, height: vh } = getViewport();
-    const maxWrapW = Math.min(
-      vw * hoverState.maxViewportFrac,
-      vw - HOVER_VIEWPORT_PAD * 2,
-    );
-    const maxWrapH = Math.min(
-      vh * hoverState.maxViewportFrac,
-      vh - HOVER_VIEWPORT_PAD * 2,
-    );
-    const maxImgW = Math.max(1, Math.floor(maxWrapW - HOVER_WRAP_CHROME));
-    const maxImgH = Math.max(1, Math.floor(maxWrapH - HOVER_WRAP_CHROME));
-    const minImgW = Math.min(40, maxImgW);
-    const minImgH = Math.min(40, maxImgH);
-
-    const safeW = Math.max(1, naturalW);
-    const safeH = Math.max(1, naturalH);
-
-    const finalScale = Math.min(maxImgW / safeW, maxImgH / safeH);
-
-    return {
-      w: Math.max(minImgW, Math.floor(safeW * finalScale)),
-      h: Math.max(minImgH, Math.floor(safeH * finalScale)),
-    };
-  }
-
-  function updateHoverPosition(x, y) {
-    const { width: vw, height: vh } = getViewport();
-
-    const w = hoverLayout.wrapW;
-    const h = hoverLayout.wrapH;
-    const pad = HOVER_VIEWPORT_PAD;
-
-    let left = x + hoverState.offset;
-    let top = y + hoverState.offset;
-
-    if (left + w + pad > vw) left = x - hoverState.offset - w;
-    if (top + h + pad > vh) top = y - hoverState.offset - h;
-
-    left = clamp(left, pad, Math.max(pad, vw - w - pad));
-    top = clamp(top, pad, Math.max(pad, vh - h - pad));
-
-    hoverWrap.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
-  }
-
-  function applyHoverSize() {
-    const naturalW = hoverActive.natural.w || 800;
-    const naturalH = hoverActive.natural.h || 600;
-    const { w, h } = computeHoverFitSize(naturalW, naturalH);
-    hoverImg.style.width = `${w}px`;
-    hoverImg.style.height = `${h}px`;
-    hoverLayout.wrapW = w + HOVER_WRAP_CHROME;
-    hoverLayout.wrapH = h + HOVER_WRAP_CHROME;
-  }
-
-  function setHoverImageUrl(url) {
-    hoverImg.src = url;
-    hoverImg.srcset = "";
-    hoverImg.sizes = "";
-    hoverActive.natural.w = 0;
-    hoverActive.natural.h = 0;
-
-    const maybeSet = () => {
-      if (hoverImg.naturalWidth && hoverImg.naturalHeight) {
-        hoverActive.natural.w = hoverImg.naturalWidth;
-        hoverActive.natural.h = hoverImg.naturalHeight;
-        applyHoverSize();
-      }
-    };
-
-    maybeSet();
-    if (!hoverActive.natural.w) {
-      hoverImg.onload = () => {
-        maybeSet();
-      };
-    }
-  }
-
-  function activateHoverTarget(el, mouseX, mouseY) {
-    if (!hoverState.enabled) return;
-    if (!el || hoverTargetIsTooSmall(el)) return;
-
-    const url = pickBestUrlFromElement(el);
-    if (!url) return;
-
-    hoverActive.el = el;
-    hoverActive.url = url;
-    hoverActive.lastMouse.x = mouseX;
-    hoverActive.lastMouse.y = mouseY;
-    hoverLayout.lastMoveAt = performance.now();
-    hoverLayout.lastFrameMouseX = Number.NaN;
-    hoverLayout.lastFrameMouseY = Number.NaN;
-
-    showHoverWrap();
-    setHoverImageUrl(url);
-    updateHoverPosition(mouseX, mouseY);
-    startHoverFollowLoop();
-  }
-
-  function disableHoverPreviewForPopout() {
-    if (!hoverState.pinned && !hoverActive.el) return;
-    hoverState.pinned = false;
-    saveHoverState();
-    hideHoverWrap();
-  }
-
-  function onHoverMouseOver(event) {
-    if (!hoverState.enabled) return;
-    if (hoverState.pinned) return;
-
-    const target = findHoverZoomableTarget(event.target);
-    if (!target) return;
-
-    if (target !== hoverActive.el)
-      activateHoverTarget(target, event.clientX, event.clientY);
-  }
-
-  function onHoverMouseMove(event) {
-    hoverActive.lastMouse.x = event.clientX;
-    hoverActive.lastMouse.y = event.clientY;
-    hoverLayout.lastMoveAt = performance.now();
-
-    if (!hoverState.enabled) return;
-    if (!hoverActive.el) return;
-
-    startHoverFollowLoop();
-  }
-
-  function onHoverClick(event) {
-    if (!hoverState.enabled) return;
-    if (event.altKey) return;
-
-    const target = findHoverZoomableTarget(event.target);
-    if (!target) return;
-
-    if (!hoverActive.el) {
-      activateHoverTarget(
-        target,
-        hoverActive.lastMouse.x,
-        hoverActive.lastMouse.y,
-      );
-    }
-
-    hoverState.pinned = !hoverState.pinned;
-    saveHoverState();
-    hoverBadge.style.display = hoverState.pinned ? "block" : "none";
-    if (hoverState.pinned) stopHoverFollowLoop();
-    else startHoverFollowLoop();
-    showHoverToast(hoverState.pinned ? "Pinned preview" : "Unpinned");
-  }
-
-  // ----- Shared keyboard handling -----
-  function onKeyDown(event) {
+  function onWindowKeyDown(event) {
     if (!(event instanceof KeyboardEvent)) return;
 
     if (event.key === "Escape") {
       closePopout();
-      hoverState.pinned = false;
-      saveHoverState();
-      hideHoverWrap();
+      state.hover.pinned = false;
+      hideHover();
       return;
     }
 
-    const tag = (event.target && event.target.tagName) || "";
+    const tag = event.target?.tagName || "";
     if (
       tag === "INPUT" ||
       tag === "TEXTAREA" ||
@@ -1215,88 +583,745 @@
     }
 
     if (event.key === "z" || event.key === "Z") {
-      hoverState.enabled = !hoverState.enabled;
-      saveHoverState();
+      state.hover.enabled = !state.hover.enabled;
+      state.hover.pinned = false;
+      savePrefs();
+      if (!state.hover.enabled) hideHover();
       showHoverToast(
-        hoverState.enabled ? "Image preview: ON" : "Image preview: OFF",
+        state.hover.enabled ? "Image preview: ON" : "Image preview: OFF",
       );
-      if (!hoverState.enabled) hideHoverWrap();
       return;
     }
 
     if (event.key === "p" || event.key === "P") {
-      if (!hoverActive.el && !hoverState.pinned) return;
-      hoverState.pinned = !hoverState.pinned;
-      saveHoverState();
-      hoverBadge.style.display = hoverState.pinned ? "block" : "none";
-      if (hoverState.pinned) stopHoverFollowLoop();
-      else startHoverFollowLoop();
-      showHoverToast(hoverState.pinned ? "Pinned preview" : "Unpinned");
-
-      if (!hoverState.pinned && hoverActive.el) {
-        const rect = hoverActive.el.getBoundingClientRect();
-        const x = hoverActive.lastMouse.x;
-        const y = hoverActive.lastMouse.y;
-        const inside =
-          x >= rect.left &&
-          x <= rect.right &&
-          y >= rect.top &&
-          y <= rect.bottom;
-        if (!inside) hideHoverWrap();
-      }
+      if (!state.hover.target) return;
+      toggleHoverPinned();
     }
   }
 
-  function onAltClick(event) {
-    if (!(event instanceof MouseEvent)) return;
-    if (!event.altKey) return;
-    if (event.button !== 0) return;
+  function onWindowPointerMove(event) {
+    if (!(event instanceof PointerEvent)) return;
+
+    if (state.popout.drag && event.pointerId === state.popout.drag.pointerId) {
+      event.preventDefault();
+      const nextLeft = state.popout.drag.startLeft + (
+        event.clientX - state.popout.drag.startX
+      );
+      const nextTop = state.popout.drag.startTop + (
+        event.clientY - state.popout.drag.startY
+      );
+      setPopoutRect(nextLeft, nextTop);
+      clampPopoutToViewport();
+      return;
+    }
+
+    if (
+      state.popout.resize &&
+      event.pointerId === state.popout.resize.pointerId
+    ) {
+      event.preventDefault();
+      const rect = getPopoutRect();
+      if (!rect) return;
+
+      const { width: vw, height: vh } = getViewport();
+      const padding = CONFIG.viewportPadding;
+      const maxWidth = Math.max(
+        CONFIG.popout.minWidth,
+        vw - state.popout.resize.startLeft - padding,
+      );
+      const maxHeight = Math.max(
+        CONFIG.popout.minHeight,
+        vh - state.popout.resize.startTop - padding,
+      );
+
+      const nextWidth = clamp(
+        state.popout.resize.startWidth + (
+          event.clientX - state.popout.resize.startX
+        ),
+        CONFIG.popout.minWidth,
+        maxWidth,
+      );
+      const nextHeight = clamp(
+        state.popout.resize.startHeight + (
+          event.clientY - state.popout.resize.startY
+        ),
+        CONFIG.popout.minHeight,
+        maxHeight,
+      );
+
+      setPopoutRect(rect.left, rect.top, nextWidth, nextHeight);
+    }
+  }
+
+  function onWindowPointerUp(event) {
+    if (!(event instanceof PointerEvent)) return;
+
+    if (state.popout.drag && event.pointerId === state.popout.drag.pointerId) {
+      releasePointerCapture(state.popout.drag.handle, event.pointerId);
+      state.popout.drag = null;
+      document.documentElement.style.userSelect = "";
+    }
+
+    if (
+      state.popout.resize &&
+      event.pointerId === state.popout.resize.pointerId
+    ) {
+      releasePointerCapture(state.popout.resize.handle, event.pointerId);
+      state.popout.resize = null;
+      document.documentElement.style.userSelect = "";
+    }
+  }
+
+  function onViewportChange() {
+    if (state.popout.open) {
+      if (state.popout.autoFit) fitPopoutToImage();
+      clampPopoutToViewport();
+    }
+
+    if (!isHoverVisible()) return;
+
+    applyHoverSize();
+    if (state.hover.pinned) return;
+
+    if (
+      state.hover.target &&
+      pointWithinElement(state.hover.target, state.hover.mouseX, state.hover.mouseY)
+    ) {
+      updateHoverPosition(state.hover.mouseX, state.hover.mouseY);
+    } else {
+      hideHover();
+    }
+  }
+
+  function onWindowBlur() {
+    if (!state.hover.pinned) hideHover();
+  }
+
+  function onDocumentMouseLeave() {
+    if (!state.hover.pinned) hideHover();
+  }
+
+  function handleAltClick(event) {
     if (event.defaultPrevented) return;
 
-    const url = extractImageUrlFromEventTarget(event.target);
-    if (!url) return;
+    const candidate = findImageCandidate(event.target);
+    if (!candidate) return;
 
     event.preventDefault();
     event.stopPropagation();
 
-    disableHoverPreviewForPopout();
-    openPopout(url);
+    state.hover.pinned = false;
+    hideHover();
+    openPopout(candidate.url);
   }
 
-  window.addEventListener("keydown", onKeyDown, true);
-  window.addEventListener("click", onAltClick, true);
-  window.addEventListener("resize", () => {
+  function handlePinClick(event) {
+    if (!state.hover.enabled || state.popout.open) return;
+
+    const candidate = findImageCandidate(event.target);
+    if (!candidate || !isTargetLargeEnough(candidate.element)) return;
+
     if (
-      STATE.overlay?.classList.contains("ip-open") &&
-      STATE.popout &&
-      STATE.popoutAutoFit
+      candidate.element !== state.hover.target ||
+      candidate.url !== state.hover.url ||
+      !isHoverVisible()
     ) {
-      maximizePopoutToViewport();
+      activateHover(candidate, event.clientX, event.clientY);
     }
-    clampPopoutToViewport();
-    if (hoverWrap.style.display === "block") {
-      applyHoverSize();
-      updateHoverPosition(hoverActive.lastMouse.x, hoverActive.lastMouse.y);
-    }
-  });
 
-  document.addEventListener("mouseover", onHoverMouseOver, true);
-  if ("PointerEvent" in window) {
-    document.addEventListener("pointermove", onHoverMouseMove, {
-      capture: true,
-      passive: true,
-    });
-  } else {
-    document.addEventListener("mousemove", onHoverMouseMove, {
-      capture: true,
-      passive: true,
-    });
+    toggleHoverPinned();
   }
-  document.addEventListener("click", onHoverClick, true);
 
-  showHoverToast(
-    hoverState.enabled
-      ? "Image preview ready (Z toggles)"
-      : "Image preview OFF (press Z)",
-  );
+  function toggleHoverPinned() {
+    state.hover.pinned = !state.hover.pinned;
+    state.ui.hoverBadge.style.display = state.hover.pinned ? "block" : "none";
+
+    if (
+      !state.hover.pinned &&
+      state.hover.target &&
+      !pointWithinElement(state.hover.target, state.hover.mouseX, state.hover.mouseY)
+    ) {
+      hideHover();
+    }
+
+    showHoverToast(state.hover.pinned ? "Pinned preview" : "Unpinned");
+  }
+
+  function activateHover(candidate, mouseX, mouseY) {
+    state.hover.target = candidate.element;
+    state.hover.url = candidate.url;
+    state.hover.mouseX = mouseX;
+    state.hover.mouseY = mouseY;
+
+    state.ui.hoverBadge.style.display = state.hover.pinned ? "block" : "none";
+    state.ui.hoverWrap.style.display = "block";
+
+    if (
+      state.ui.hoverImg.src !== candidate.url ||
+      !state.hover.naturalW ||
+      !state.hover.naturalH
+    ) {
+      setHoverImageUrl(candidate.url);
+    } else {
+      applyHoverSize();
+    }
+
+    updateHoverPosition(mouseX, mouseY);
+  }
+
+  function hideHover() {
+    state.hover.target = null;
+    state.hover.url = "";
+    state.hover.naturalW = 0;
+    state.hover.naturalH = 0;
+    state.hover.lastEventTarget = null;
+    state.ui.hoverBadge.style.display = "none";
+    state.ui.hoverWrap.style.display = "none";
+    state.ui.hoverWrap.style.transform = "translate3d(-9999px, -9999px, 0)";
+  }
+
+  function isHoverVisible() {
+    return state.ui.hoverWrap.style.display === "block";
+  }
+
+  function setHoverImageUrl(url) {
+    const token = ++state.hover.loadToken;
+    const img = state.ui.hoverImg;
+
+    state.hover.naturalW = 0;
+    state.hover.naturalH = 0;
+    applyHoverSize();
+
+    img.onload = () => {
+      if (token !== state.hover.loadToken) return;
+      state.hover.naturalW = img.naturalWidth || CONFIG.hover.fallbackWidth;
+      state.hover.naturalH = img.naturalHeight || CONFIG.hover.fallbackHeight;
+      applyHoverSize();
+      if (isHoverVisible()) {
+        updateHoverPosition(state.hover.mouseX, state.hover.mouseY);
+      }
+    };
+
+    img.onerror = () => {
+      if (token !== state.hover.loadToken) return;
+      hideHover();
+    };
+
+    if (img.src === url && img.complete && img.naturalWidth) {
+      state.hover.naturalW = img.naturalWidth;
+      state.hover.naturalH = img.naturalHeight || CONFIG.hover.fallbackHeight;
+      applyHoverSize();
+      updateHoverPosition(state.hover.mouseX, state.hover.mouseY);
+      return;
+    }
+
+    img.removeAttribute("src");
+    img.src = url;
+  }
+
+  function applyHoverSize() {
+    const naturalW = state.hover.naturalW || CONFIG.hover.fallbackWidth;
+    const naturalH = state.hover.naturalH || CONFIG.hover.fallbackHeight;
+    const size = computeHoverSize(naturalW, naturalH);
+
+    state.ui.hoverImg.style.width = `${size.width}px`;
+    state.ui.hoverImg.style.height = `${size.height}px`;
+
+    const chrome = (CONFIG.hover.padding * 2) + (CONFIG.hover.borderWidth * 2);
+    state.hover.wrapW = size.width + chrome;
+    state.hover.wrapH = size.height + chrome;
+  }
+
+  function computeHoverSize(naturalW, naturalH) {
+    const { width: vw, height: vh } = getViewport();
+    const maxWrapW = Math.min(
+      vw * CONFIG.hover.maxViewportFraction,
+      vw - (CONFIG.hover.viewportPadding * 2),
+    );
+    const maxWrapH = Math.min(
+      vh * CONFIG.hover.maxViewportFraction,
+      vh - (CONFIG.hover.viewportPadding * 2),
+    );
+    const chrome = (CONFIG.hover.padding * 2) + (CONFIG.hover.borderWidth * 2);
+    const maxImgW = Math.max(40, Math.floor(maxWrapW - chrome));
+    const maxImgH = Math.max(40, Math.floor(maxWrapH - chrome));
+
+    const safeW = Math.max(1, naturalW);
+    const safeH = Math.max(1, naturalH);
+    const scale = Math.min(maxImgW / safeW, maxImgH / safeH, 1);
+
+    return {
+      width: Math.max(40, Math.floor(safeW * scale)),
+      height: Math.max(40, Math.floor(safeH * scale)),
+    };
+  }
+
+  function updateHoverPosition(mouseX, mouseY) {
+    const { width: vw, height: vh } = getViewport();
+    const pad = CONFIG.hover.viewportPadding;
+    const offset = CONFIG.hover.offset;
+    const width = state.hover.wrapW;
+    const height = state.hover.wrapH;
+
+    let left = mouseX + offset;
+    let top = mouseY + offset;
+
+    if (left + width + pad > vw) left = mouseX - offset - width;
+    if (top + height + pad > vh) top = mouseY - offset - height;
+
+    left = clamp(left, pad, Math.max(pad, vw - width - pad));
+    top = clamp(top, pad, Math.max(pad, vh - height - pad));
+
+    state.ui.hoverWrap.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
+  }
+
+  function openPopout(url) {
+    state.popout.open = true;
+    state.popout.url = url;
+    state.popout.autoFit = true;
+    state.ui.popoutTitle.textContent = url;
+    state.ui.overlay.classList.add("is-open");
+    state.ui.popoutToast.classList.remove("is-visible");
+
+    const initialRect = getInitialPopoutRect();
+    setPopoutRect(
+      initialRect.left,
+      initialRect.top,
+      initialRect.width,
+      initialRect.height,
+    );
+
+    const token = ++state.popout.loadToken;
+    const img = state.ui.popoutImg;
+
+    img.onload = () => {
+      if (token !== state.popout.loadToken) return;
+      if (state.popout.autoFit) fitPopoutToImage();
+    };
+
+    img.onerror = () => {
+      if (token !== state.popout.loadToken) return;
+      showPopoutToast("Failed to load image");
+    };
+
+    if (img.src === url && img.complete && img.naturalWidth) {
+      fitPopoutToImage();
+      return;
+    }
+
+    img.removeAttribute("src");
+    img.src = url;
+  }
+
+  function closePopout() {
+    if (!state.popout.open) return;
+    state.popout.open = false;
+    state.popout.drag = null;
+    state.popout.resize = null;
+    state.ui.overlay.classList.remove("is-open");
+    state.ui.popoutToast.classList.remove("is-visible");
+    document.documentElement.style.userSelect = "";
+  }
+
+  function openPopoutUrlInNewTab() {
+    if (!state.popout.url) return;
+    window.open(state.popout.url, "_blank", "noopener,noreferrer");
+  }
+
+  async function copyPopoutUrl() {
+    if (!state.popout.url) return;
+
+    try {
+      await navigator.clipboard.writeText(state.popout.url);
+      showPopoutToast("Copied URL");
+    } catch {
+      window.prompt("Copy image URL:", state.popout.url);
+    }
+  }
+
+  function showHoverToast(message) {
+    showToast(
+      state.ui.hoverToast,
+      "hover",
+      message,
+      900,
+    );
+  }
+
+  function showPopoutToast(message) {
+    showToast(
+      state.ui.popoutToast,
+      "popout",
+      message,
+      1200,
+    );
+  }
+
+  function showToast(element, type, message, duration) {
+    if (!element) return;
+
+    const owner = type === "hover" ? state.hover : state.popout;
+
+    element.textContent = message;
+    element.classList.add("is-visible");
+    window.clearTimeout(owner.toastTimer);
+    owner.toastTimer = window.setTimeout(() => {
+      element.classList.remove("is-visible");
+    }, duration);
+  }
+
+  function startPopoutDrag(event) {
+    if (!(event instanceof PointerEvent)) return;
+    if (event.button !== 0) return;
+    if (!state.popout.open) return;
+
+    const target = event.target;
+    if (target instanceof Element && target.closest(".hz-btn")) return;
+
+    const rect = getPopoutRect();
+    if (!rect) return;
+
+    event.preventDefault();
+    state.popout.autoFit = false;
+    document.documentElement.style.userSelect = "none";
+
+    state.popout.drag = {
+      handle: event.currentTarget,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: rect.left,
+      startTop: rect.top,
+    };
+
+    capturePointer(event.currentTarget, event.pointerId);
+  }
+
+  function startPopoutResize(event) {
+    if (!(event instanceof PointerEvent)) return;
+    if (event.button !== 0) return;
+    if (!state.popout.open) return;
+
+    const rect = getPopoutRect();
+    if (!rect) return;
+
+    event.preventDefault();
+    state.popout.autoFit = false;
+    document.documentElement.style.userSelect = "none";
+
+    state.popout.resize = {
+      handle: event.currentTarget,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: rect.width,
+      startHeight: rect.height,
+      startLeft: rect.left,
+      startTop: rect.top,
+    };
+
+    capturePointer(event.currentTarget, event.pointerId);
+  }
+
+  function capturePointer(handle, pointerId) {
+    if (!(handle instanceof Element)) return;
+    try {
+      handle.setPointerCapture(pointerId);
+    } catch {}
+  }
+
+  function releasePointerCapture(handle, pointerId) {
+    if (!(handle instanceof Element)) return;
+    try {
+      handle.releasePointerCapture(pointerId);
+    } catch {}
+  }
+
+  function fitPopoutToImage() {
+    const img = state.ui.popoutImg;
+    if (!img) return;
+
+    const { width: vw, height: vh } = getViewport();
+    const pad = CONFIG.viewportPadding;
+    const maxWidth = Math.max(
+      CONFIG.popout.minWidth,
+      Math.floor(vw * CONFIG.popout.maxViewportFraction),
+    );
+    const maxHeight = Math.max(
+      CONFIG.popout.minHeight,
+      Math.floor(vh * CONFIG.popout.maxViewportFraction),
+    );
+    const maxBodyHeight = Math.max(
+      80,
+      maxHeight - CONFIG.popout.titlebarHeight,
+    );
+
+    const naturalW = Math.max(1, img.naturalWidth || maxWidth);
+    const naturalH = Math.max(1, img.naturalHeight || maxBodyHeight);
+    const scale = Math.min(maxWidth / naturalW, maxBodyHeight / naturalH, 1);
+
+    const width = clamp(
+      Math.floor(naturalW * scale),
+      CONFIG.popout.minWidth,
+      vw - (pad * 2),
+    );
+    const bodyHeight = clamp(
+      Math.floor(naturalH * scale),
+      80,
+      vh - (pad * 2) - CONFIG.popout.titlebarHeight,
+    );
+    const height = clamp(
+      bodyHeight + CONFIG.popout.titlebarHeight,
+      CONFIG.popout.minHeight,
+      vh - (pad * 2),
+    );
+
+    const left = Math.round((vw - width) / 2);
+    const top = Math.round((vh - height) / 2);
+    setPopoutRect(left, top, width, height);
+    clampPopoutToViewport();
+  }
+
+  function getInitialPopoutRect() {
+    const { width: vw, height: vh } = getViewport();
+    const pad = CONFIG.viewportPadding;
+    const width = clamp(
+      Math.floor(vw * 0.68),
+      CONFIG.popout.minWidth,
+      vw - (pad * 2),
+    );
+    const height = clamp(
+      Math.floor(vh * 0.68),
+      CONFIG.popout.minHeight,
+      vh - (pad * 2),
+    );
+
+    return {
+      left: Math.round((vw - width) / 2),
+      top: Math.round((vh - height) / 2),
+      width,
+      height,
+    };
+  }
+
+  function getPopoutRect() {
+    const popoutWindow = state.ui.popoutWindow;
+    if (!popoutWindow) return null;
+    return popoutWindow.getBoundingClientRect();
+  }
+
+  function setPopoutRect(left, top, width, height) {
+    const popoutWindow = state.ui.popoutWindow;
+    if (!popoutWindow) return;
+
+    if (typeof left === "number") popoutWindow.style.left = `${Math.round(left)}px`;
+    if (typeof top === "number") popoutWindow.style.top = `${Math.round(top)}px`;
+    if (typeof width === "number") popoutWindow.style.width = `${Math.round(width)}px`;
+    if (typeof height === "number") popoutWindow.style.height = `${Math.round(height)}px`;
+  }
+
+  function clampPopoutToViewport() {
+    const rect = getPopoutRect();
+    if (!rect) return;
+
+    const { width: vw, height: vh } = getViewport();
+    const padding = CONFIG.viewportPadding;
+    const width = clamp(rect.width, 1, vw - (padding * 2));
+    const height = clamp(rect.height, 1, vh - (padding * 2));
+    const left = clamp(
+      rect.left,
+      padding,
+      Math.max(padding, vw - width - padding),
+    );
+    const top = clamp(
+      rect.top,
+      padding,
+      Math.max(padding, vh - height - padding),
+    );
+
+    setPopoutRect(left, top, width, height);
+  }
+
+  function findImageCandidate(start) {
+    if (!(start instanceof Element)) return null;
+    if (isInsideUserscriptUi(start)) return null;
+
+    const image = start.closest("img");
+    if (image) {
+      const linkedUrl = image.closest("a[href]")?.getAttribute("href") || "";
+      if (isLikelyImageUrl(linkedUrl)) {
+        return { element: image, url: resolveUrl(linkedUrl) };
+      }
+
+      const imageUrl = pickBestImageUrl(image);
+      if (imageUrl) return { element: image, url: imageUrl };
+    }
+
+    for (let element = start; element; element = element.parentElement) {
+      if (element.matches?.("a[href]")) {
+        const href = element.getAttribute("href") || "";
+        if (isLikelyImageUrl(href)) {
+          return { element, url: resolveUrl(href) };
+        }
+      }
+
+      if (element.matches?.(BACKGROUND_IMAGE_SELECTOR)) {
+        const backgroundUrl = getBackgroundImageUrl(element);
+        if (backgroundUrl) {
+          return { element, url: backgroundUrl };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function isInsideUserscriptUi(element) {
+    return Boolean(
+      element.closest?.(
+        `#${IDS.overlay}, #${IDS.hoverWrap}, #${IDS.hoverToast}`,
+      ),
+    );
+  }
+
+  function isTargetLargeEnough(element) {
+    const rect = element.getBoundingClientRect?.();
+    if (!rect) return false;
+    return (
+      rect.width >= CONFIG.minTargetPixels &&
+      rect.height >= CONFIG.minTargetPixels
+    );
+  }
+
+  function pointWithinElement(element, x, y) {
+    const rect = element.getBoundingClientRect?.();
+    if (!rect) return false;
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+  }
+
+  function pickBestImageUrl(image) {
+    const srcsetUrl = pickBestSrcsetUrl(image.getAttribute("srcset") || image.srcset || "");
+    if (srcsetUrl) return srcsetUrl;
+
+    const currentSrc = resolveUrl(image.currentSrc || "");
+    if (currentSrc) return currentSrc;
+
+    for (const attr of LAZY_IMAGE_ATTRS) {
+      const value = image.getAttribute(attr);
+      if (value) return resolveUrl(value);
+    }
+
+    return resolveUrl(image.src || "");
+  }
+
+  function pickBestSrcsetUrl(srcset) {
+    const entries = parseSrcset(srcset);
+    if (entries.length === 0) return "";
+
+    const withWidth = entries.filter((entry) => typeof entry.width === "number");
+    if (withWidth.length) {
+      withWidth.sort((a, b) => (b.width || 0) - (a.width || 0));
+      return resolveUrl(withWidth[0].url);
+    }
+
+    const withDensity = entries.filter(
+      (entry) => typeof entry.density === "number",
+    );
+    if (withDensity.length) {
+      withDensity.sort((a, b) => (b.density || 0) - (a.density || 0));
+      return resolveUrl(withDensity[0].url);
+    }
+
+    return resolveUrl(entries[0].url);
+  }
+
+  function parseSrcset(srcset) {
+    if (!srcset) return [];
+
+    return srcset
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const [url, descriptor] = part.split(/\s+/, 2);
+        const widthMatch = descriptor?.match(/^(\d+)w$/);
+        const densityMatch = descriptor?.match(/^(\d+(?:\.\d+)?)x$/);
+
+        return {
+          url,
+          width: widthMatch ? Number(widthMatch[1]) : null,
+          density: densityMatch ? Number(densityMatch[1]) : null,
+        };
+      })
+      .filter((entry) => entry.url);
+  }
+
+  function getBackgroundImageUrl(element) {
+    try {
+      const backgroundImage = getComputedStyle(element).backgroundImage;
+      if (!backgroundImage || backgroundImage === "none") return "";
+
+      const match = backgroundImage.match(/url\(["']?(.*?)["']?\)/i);
+      return resolveUrl(match?.[1] || "");
+    } catch {
+      return "";
+    }
+  }
+
+  function isLikelyImageUrl(url) {
+    if (!url) return false;
+    if (url.startsWith("data:image/")) return true;
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      return /\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)$/i.test(
+        parsed.pathname,
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function resolveUrl(url) {
+    if (!url) return "";
+    if (url.startsWith("data:image/")) return url;
+
+    try {
+      return normalizeKnownImageUrl(new URL(url, window.location.href).href);
+    } catch {
+      return normalizeKnownImageUrl(url);
+    }
+  }
+
+  function normalizeKnownImageUrl(url) {
+    if (!url || url.startsWith("data:image/")) return url;
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      const host = parsed.hostname.toLowerCase();
+
+      if (host.endsWith("twimg.com")) {
+        if (parsed.searchParams.has("format") || parsed.searchParams.has("name")) {
+          parsed.searchParams.set("name", "orig");
+        }
+      }
+
+      return parsed.href;
+    } catch {
+      return url;
+    }
+  }
+
+  function getViewport() {
+    const viewport = window.visualViewport;
+    if (viewport?.width && viewport?.height) {
+      return { width: viewport.width, height: viewport.height };
+    }
+
+    return { width: window.innerWidth, height: window.innerHeight };
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
 })();
