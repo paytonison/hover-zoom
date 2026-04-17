@@ -36,6 +36,7 @@
   const STORAGE_KEY = "image_popout_safari_v2";
   const BACKGROUND_IMAGE_SELECTOR =
     "div, span, a, button, figure, section, article, li";
+  const NESTED_IMAGE_CONTAINER_SELECTOR = "a, figure, picture, span";
   const LAZY_IMAGE_ATTRS = [
     "data-src",
     "data-original",
@@ -578,7 +579,11 @@
 
     if (event.target !== state.hover.lastEventTarget) {
       state.hover.lastEventTarget = event.target;
-      const candidate = findImageCandidate(event.target);
+      const candidate = findImageCandidate(
+        event.target,
+        event.clientX,
+        event.clientY,
+      );
       if (candidate && isTargetLargeEnough(candidate.element)) {
         activateHover(candidate, event.clientX, event.clientY);
       } else if (
@@ -599,10 +604,11 @@
     if (
       !pointWithinElement(state.hover.target, event.clientX, event.clientY)
     ) {
-      const candidate = findImageCandidate(document.elementFromPoint(
+      const candidate = findImageCandidate(
+        document.elementFromPoint(event.clientX, event.clientY),
         event.clientX,
         event.clientY,
-      ));
+      );
       if (candidate && isTargetLargeEnough(candidate.element)) {
         activateHover(candidate, event.clientX, event.clientY);
       } else {
@@ -768,7 +774,11 @@
   function handleAltClick(event) {
     if (event.defaultPrevented) return;
 
-    const candidate = findPopoutCandidate(event.target);
+    const candidate = findPopoutCandidate(
+      event.target,
+      event.clientX,
+      event.clientY,
+    );
     if (!candidate) return;
 
     event.preventDefault();
@@ -782,7 +792,11 @@
   function handlePinClick(event) {
     if (!state.hover.enabled || state.popout.open) return;
 
-    const candidate = findImageCandidate(event.target);
+    const candidate = findImageCandidate(
+      event.target,
+      event.clientX,
+      event.clientY,
+    );
     if (!candidate || !isTargetLargeEnough(candidate.element)) return;
 
     if (
@@ -1438,22 +1452,21 @@
     setPopoutRect(left, top, width, height);
   }
 
-  function findImageCandidate(start) {
+  function findImageCandidate(start, clientX, clientY) {
     if (!(start instanceof Element)) return null;
     if (isInsideUserscriptUi(start)) return null;
 
     const image = start.closest("img");
     if (image) {
-      const linkedUrl = image.closest("a[href]")?.getAttribute("href") || "";
-      if (isLikelyImageUrl(linkedUrl)) {
-        return { element: image, url: resolveUrl(linkedUrl) };
-      }
-
-      const imageUrl = pickBestImageUrl(image);
-      if (imageUrl) return { element: image, url: imageUrl };
+      return buildImageCandidate(image);
     }
 
     for (let element = start; element; element = element.parentElement) {
+      const nestedImage = findNestedImageAtPoint(element, clientX, clientY);
+      if (nestedImage) {
+        return buildImageCandidate(nestedImage);
+      }
+
       if (element.matches?.("a[href]")) {
         const href = element.getAttribute("href") || "";
         if (isLikelyImageUrl(href)) {
@@ -1472,7 +1485,7 @@
     return null;
   }
 
-  function findPopoutCandidate(start) {
+  function findPopoutCandidate(start, clientX, clientY) {
     if (!(start instanceof Element)) return null;
     if (isInsideUserscriptUi(start)) return null;
 
@@ -1484,7 +1497,7 @@
       }
     }
 
-    const imageCandidate = findImageCandidate(start);
+    const imageCandidate = findImageCandidate(start, clientX, clientY);
     if (imageCandidate) {
       return { ...imageCandidate, type: "image" };
     }
@@ -1522,6 +1535,32 @@
     const rect = element.getBoundingClientRect?.();
     if (!rect) return false;
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+  }
+
+  function buildImageCandidate(image) {
+    if (!(image instanceof HTMLImageElement)) return null;
+
+    const linkedUrl = image.closest("a[href]")?.getAttribute("href") || "";
+    if (isLikelyImageUrl(linkedUrl)) {
+      return { element: image, url: resolveUrl(linkedUrl) };
+    }
+
+    const imageUrl = pickBestImageUrl(image);
+    if (!imageUrl) return null;
+
+    return { element: image, url: imageUrl };
+  }
+
+  function findNestedImageAtPoint(element, clientX, clientY) {
+    if (!(element instanceof Element)) return null;
+    if (typeof clientX !== "number" || typeof clientY !== "number") return null;
+    if (!element.matches?.(NESTED_IMAGE_CONTAINER_SELECTOR)) return null;
+
+    for (const image of element.querySelectorAll("img")) {
+      if (pointWithinElement(image, clientX, clientY)) return image;
+    }
+
+    return null;
   }
 
   function pickBestImageUrl(image) {
@@ -1685,6 +1724,15 @@
       const parsed = new URL(url, window.location.href);
       const host = parsed.hostname.toLowerCase();
 
+      if (host === "upload.wikimedia.org" && parsed.pathname.includes("/thumb/")) {
+        const originalPath = getWikimediaOriginalPath(parsed.pathname);
+        if (originalPath) {
+          parsed.pathname = originalPath;
+          parsed.search = "";
+          parsed.hash = "";
+        }
+      }
+
       if (host.endsWith("twimg.com")) {
         if (parsed.searchParams.has("format") || parsed.searchParams.has("name")) {
           parsed.searchParams.set("name", "orig");
@@ -1695,6 +1743,16 @@
     } catch {
       return url;
     }
+  }
+
+  function getWikimediaOriginalPath(pathname) {
+    const segments = pathname.split("/").filter(Boolean);
+    const thumbIndex = segments.indexOf("thumb");
+    if (thumbIndex === -1 || segments.length <= thumbIndex + 2) return "";
+
+    return `/${segments
+      .filter((_, index) => index !== thumbIndex && index !== segments.length - 1)
+      .join("/")}`;
   }
 
   function getViewport() {
