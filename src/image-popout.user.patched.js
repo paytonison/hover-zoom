@@ -2,7 +2,7 @@
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
 // @version      1.0.0
-// @description  Hover images for a near-cursor preview. Click pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
+// @description  Hover images or videos for a near-cursor preview. Click pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
@@ -29,6 +29,8 @@
     resize: "hz-resize",
     hoverWrap: "hz-hover-wrap",
     hoverImg: "hz-hover-img",
+    hoverVideo: "hz-hover-video",
+    hoverLiveHost: "hz-hover-live-host",
     hoverBadge: "hz-hover-badge",
     hoverToast: "hz-hover-toast",
   };
@@ -107,6 +109,7 @@
     "webm",
     "webp",
   ]);
+  const VIDEO_PREVIEW_CACHE = new WeakMap();
 
   const state = {
     hover: {
@@ -114,6 +117,8 @@
       pinned: false,
       target: null,
       url: "",
+      previewMode: "image",
+      interactive: false,
       mouseX: 0,
       mouseY: 0,
       naturalW: 0,
@@ -122,6 +127,10 @@
       wrapH: 240,
       loadToken: 0,
       lastEventTarget: null,
+      fallbackUrl: "",
+      videoCurrentTime: 0,
+      videoShouldPlay: false,
+      live: null,
       toastTimer: 0,
     },
     popout: {
@@ -147,6 +156,8 @@
       popoutToast: null,
       hoverWrap: null,
       hoverImg: null,
+      hoverVideo: null,
+      hoverLiveHost: null,
       hoverBadge: null,
       hoverToast: null,
     },
@@ -403,13 +414,32 @@
         will-change: transform;
       }
 
-      #${IDS.hoverImg} {
+      #${IDS.hoverWrap}.is-interactive {
+        pointer-events: auto;
+      }
+
+      #${IDS.hoverImg},
+      #${IDS.hoverVideo},
+      #${IDS.hoverLiveHost} {
         display: block;
         max-width: none;
         max-height: none;
         border-radius: ${CONFIG.hover.borderRadius - 6}px;
         background: var(--hz-image-bg);
         box-shadow: inset 0 0 0 1px var(--hz-border-soft);
+      }
+
+      #${IDS.hoverVideo},
+      #${IDS.hoverLiveHost} {
+        display: none;
+      }
+
+      #${IDS.hoverVideo} {
+        object-fit: contain;
+      }
+
+      #${IDS.hoverLiveHost} {
+        overflow: hidden;
       }
 
       #${IDS.hoverBadge} {
@@ -499,6 +529,17 @@
     hoverImg.decoding = "async";
     hoverImg.loading = "eager";
 
+    const hoverVideo = document.createElement("video");
+    hoverVideo.id = IDS.hoverVideo;
+    hoverVideo.controls = true;
+    hoverVideo.defaultMuted = true;
+    hoverVideo.muted = true;
+    hoverVideo.playsInline = true;
+    hoverVideo.preload = "metadata";
+
+    const hoverLiveHost = document.createElement("div");
+    hoverLiveHost.id = IDS.hoverLiveHost;
+
     const hoverBadge = document.createElement("div");
     hoverBadge.id = IDS.hoverBadge;
     hoverBadge.textContent = "PINNED";
@@ -506,7 +547,7 @@
     const hoverToast = document.createElement("div");
     hoverToast.id = IDS.hoverToast;
 
-    hoverWrap.append(hoverImg, hoverBadge);
+    hoverWrap.append(hoverImg, hoverVideo, hoverLiveHost, hoverBadge);
     mount.append(overlay, hoverWrap, hoverToast);
 
     state.ui.overlay = overlay;
@@ -517,6 +558,8 @@
     state.ui.popoutToast = popoutToast;
     state.ui.hoverWrap = hoverWrap;
     state.ui.hoverImg = hoverImg;
+    state.ui.hoverVideo = hoverVideo;
+    state.ui.hoverLiveHost = hoverLiveHost;
     state.ui.hoverBadge = hoverBadge;
     state.ui.hoverToast = hoverToast;
 
@@ -579,6 +622,7 @@
     if (!(event instanceof MouseEvent)) return;
 
     if (shouldSuppressDocumentClick()) return;
+    if (isInsideUserscriptUi(event.target)) return;
     if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
 
     if (event.altKey) {
@@ -634,10 +678,18 @@
     state.hover.mouseY = event.clientY;
 
     if (!state.hover.enabled || state.popout.open || state.hover.pinned) return;
+    if (
+      state.hover.interactive &&
+      isHoverWrapTarget(event.target) &&
+      isHoverVisible()
+    ) {
+      state.hover.lastEventTarget = event.target;
+      return;
+    }
 
     if (event.target !== state.hover.lastEventTarget) {
       state.hover.lastEventTarget = event.target;
-      const candidate = findImageCandidate(
+      const candidate = findHoverCandidate(
         event.target,
         event.clientX,
         event.clientY,
@@ -662,7 +714,7 @@
     if (
       !pointWithinElement(state.hover.target, event.clientX, event.clientY)
     ) {
-      const candidate = findImageCandidate(
+      const candidate = findHoverCandidate(
         document.elementFromPoint(event.clientX, event.clientY),
         event.clientX,
         event.clientY,
@@ -716,7 +768,7 @@
       savePrefs();
       if (!state.hover.enabled) hideHover();
       showHoverToast(
-        state.hover.enabled ? "Image preview: ON" : "Image preview: OFF",
+        state.hover.enabled ? "Media preview: ON" : "Media preview: OFF",
       );
       return;
     }
@@ -856,7 +908,7 @@
     if (!state.hover.enabled || state.popout.open) return;
     if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
 
-    const candidate = findImageCandidate(
+    const candidate = findHoverCandidate(
       event.target,
       event.clientX,
       event.clientY,
@@ -877,6 +929,7 @@
   function toggleHoverPinned() {
     state.hover.pinned = !state.hover.pinned;
     state.ui.hoverBadge.style.display = state.hover.pinned ? "block" : "none";
+    updateHoverInteractivity();
 
     if (
       !state.hover.pinned &&
@@ -890,36 +943,67 @@
   }
 
   function activateHover(candidate, mouseX, mouseY) {
-    state.hover.target = candidate.element;
-    state.hover.url = candidate.url;
+    const previewMode = candidate.previewMode || "image";
+
+    state.hover.url = candidate.url || "";
+    state.hover.previewMode = previewMode;
+    state.hover.fallbackUrl = candidate.fallbackUrl || "";
+    state.hover.videoCurrentTime = clamp(
+      Number(candidate.currentTime) || 0,
+      0,
+      Number.MAX_SAFE_INTEGER,
+    );
+    state.hover.videoShouldPlay = candidate.shouldPlay === true;
+    state.hover.interactive = previewMode !== "image";
     state.hover.mouseX = mouseX;
     state.hover.mouseY = mouseY;
 
     state.ui.hoverBadge.style.display = state.hover.pinned ? "block" : "none";
     state.ui.hoverWrap.style.display = "block";
+    updateHoverInteractivity();
 
-    if (
-      state.ui.hoverImg.src !== candidate.url ||
-      !state.hover.naturalW ||
-      !state.hover.naturalH
-    ) {
-      setHoverImageUrl(candidate.url);
+    if (previewMode === "live") {
+      state.hover.target = attachHoverLiveElement(candidate);
+    } else if (previewMode === "video") {
+      state.hover.target = candidate.hoverTarget || candidate.element;
+      setHoverVideoCandidate(candidate);
     } else {
-      applyHoverSize();
+      state.hover.target = candidate.hoverTarget || candidate.element;
+      if (
+        state.ui.hoverImg.src !== candidate.url ||
+        !state.hover.naturalW ||
+        !state.hover.naturalH
+      ) {
+        setHoverImageUrl(candidate.url);
+      } else {
+        showHoverPreviewMode("image");
+        clearHoverVideo();
+        teardownHoverLiveElement();
+        applyHoverSize();
+      }
     }
 
     updateHoverPosition(mouseX, mouseY);
   }
 
   function hideHover() {
+    teardownHoverLiveElement();
+    clearHoverVideo();
+    showHoverPreviewMode("image");
     state.hover.target = null;
     state.hover.url = "";
+    state.hover.previewMode = "image";
+    state.hover.interactive = false;
+    state.hover.fallbackUrl = "";
+    state.hover.videoCurrentTime = 0;
+    state.hover.videoShouldPlay = false;
     state.hover.naturalW = 0;
     state.hover.naturalH = 0;
     state.hover.lastEventTarget = null;
     state.ui.hoverBadge.style.display = "none";
     state.ui.hoverWrap.style.display = "none";
     state.ui.hoverWrap.style.transform = "translate3d(-9999px, -9999px, 0)";
+    updateHoverInteractivity();
   }
 
   function isHoverVisible() {
@@ -930,6 +1014,9 @@
     const token = ++state.hover.loadToken;
     const img = state.ui.hoverImg;
 
+    showHoverPreviewMode("image");
+    clearHoverVideo();
+    teardownHoverLiveElement();
     state.hover.naturalW = 0;
     state.hover.naturalH = 0;
     applyHoverSize();
@@ -961,6 +1048,212 @@
     img.src = url;
   }
 
+  function setHoverVideoCandidate(candidate) {
+    const token = ++state.hover.loadToken;
+    const video = state.ui.hoverVideo;
+
+    showHoverPreviewMode("video");
+    teardownHoverLiveElement();
+    clearHoverVideo();
+    state.hover.naturalW = 0;
+    state.hover.naturalH = 0;
+    applyHoverSize();
+
+    video.onloadedmetadata = () => {
+      if (token !== state.hover.loadToken) return;
+
+      state.hover.naturalW = video.videoWidth || CONFIG.hover.fallbackWidth;
+      state.hover.naturalH = video.videoHeight || CONFIG.hover.fallbackHeight;
+      applyHoverSize();
+
+      if (Number.isFinite(state.hover.videoCurrentTime)) {
+        try {
+          video.currentTime = Math.min(
+            state.hover.videoCurrentTime,
+            Number.isFinite(video.duration)
+              ? Math.max(0, video.duration - 0.05)
+              : state.hover.videoCurrentTime,
+          );
+        } catch {}
+      }
+
+      if (state.hover.videoShouldPlay) {
+        video.play().catch(() => {});
+      }
+
+      if (isHoverVisible()) {
+        updateHoverPosition(state.hover.mouseX, state.hover.mouseY);
+      }
+    };
+
+    video.onerror = () => {
+      if (token !== state.hover.loadToken) return;
+      if (candidate.fallbackUrl) {
+        setHoverImageUrl(candidate.fallbackUrl);
+      } else {
+        hideHover();
+      }
+    };
+
+    video.src = candidate.url;
+    video.load();
+  }
+
+  function clearHoverVideo() {
+    const video = state.ui.hoverVideo;
+    if (!video) return;
+
+    video.onloadedmetadata = null;
+    video.onerror = null;
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+  }
+
+  function attachHoverLiveElement(candidate) {
+    const liveElement = candidate.liveElement;
+    if (!(liveElement instanceof HTMLElement)) {
+      if (candidate.fallbackUrl) {
+        setHoverImageUrl(candidate.fallbackUrl);
+      } else {
+        hideHover();
+      }
+      return candidate.hoverTarget || candidate.element;
+    }
+
+    showHoverPreviewMode("live");
+    clearHoverVideo();
+
+    if (state.hover.live?.element !== liveElement) {
+      teardownHoverLiveElement();
+
+      const rect = liveElement.getBoundingClientRect();
+      const placeholder = document.createElement("div");
+      placeholder.style.width = `${Math.max(1, Math.round(rect.width))}px`;
+      placeholder.style.height = `${Math.max(1, Math.round(rect.height))}px`;
+      placeholder.style.pointerEvents = "none";
+
+      const originalParent = liveElement.parentNode;
+      const originalNextSibling = liveElement.nextSibling;
+      const originalStyle = liveElement.getAttribute("style");
+      const originalControls = (
+        liveElement instanceof HTMLVideoElement ? liveElement.controls : null
+      );
+      const hadControlsAttribute = liveElement.hasAttribute("controls");
+
+      if (!(originalParent instanceof Node)) {
+        if (candidate.fallbackUrl) {
+          setHoverImageUrl(candidate.fallbackUrl);
+        } else {
+          hideHover();
+        }
+        return candidate.hoverTarget || candidate.element;
+      }
+
+      originalParent.insertBefore(placeholder, liveElement);
+      state.ui.hoverLiveHost.appendChild(liveElement);
+
+      if (liveElement instanceof HTMLVideoElement) {
+        liveElement.controls = true;
+      }
+
+      liveElement.style.display = "block";
+      liveElement.style.width = "100%";
+      liveElement.style.height = "100%";
+      liveElement.style.maxWidth = "none";
+      liveElement.style.maxHeight = "none";
+      liveElement.style.objectFit = "contain";
+      liveElement.style.position = "static";
+      liveElement.style.inset = "auto";
+      liveElement.style.transform = "none";
+
+      state.hover.live = {
+        element: liveElement,
+        placeholder,
+        originalParent,
+        originalNextSibling,
+        originalStyle,
+        originalControls,
+        hadControlsAttribute,
+      };
+
+      if (liveElement instanceof HTMLVideoElement) {
+        state.hover.naturalW = (
+          liveElement.videoWidth ||
+          rect.width ||
+          CONFIG.hover.fallbackWidth
+        );
+        state.hover.naturalH = (
+          liveElement.videoHeight ||
+          rect.height ||
+          CONFIG.hover.fallbackHeight
+        );
+      } else {
+        state.hover.naturalW = rect.width || CONFIG.hover.fallbackWidth;
+        state.hover.naturalH = rect.height || CONFIG.hover.fallbackHeight;
+      }
+    }
+
+    applyHoverSize();
+    return state.hover.live?.placeholder || candidate.hoverTarget || candidate.element;
+  }
+
+  function teardownHoverLiveElement() {
+    const live = state.hover.live;
+    if (!live) return;
+
+    const {
+      element,
+      placeholder,
+      originalParent,
+      originalNextSibling,
+      originalStyle,
+      originalControls,
+      hadControlsAttribute,
+    } = live;
+
+    if (placeholder?.parentNode) {
+      placeholder.parentNode.insertBefore(element, placeholder);
+      placeholder.remove();
+    } else if (originalParent?.isConnected) {
+      originalParent.insertBefore(element, originalNextSibling || null);
+    }
+
+    if (typeof originalStyle === "string" && originalStyle) {
+      element.setAttribute("style", originalStyle);
+    } else {
+      element.removeAttribute("style");
+    }
+
+    if (element instanceof HTMLVideoElement) {
+      if (typeof originalControls === "boolean") {
+        element.controls = originalControls;
+      }
+
+      if (hadControlsAttribute) {
+        element.setAttribute("controls", "");
+      } else {
+        element.removeAttribute("controls");
+      }
+    }
+
+    state.ui.hoverLiveHost.textContent = "";
+    state.hover.live = null;
+  }
+
+  function showHoverPreviewMode(mode) {
+    state.ui.hoverImg.style.display = mode === "image" ? "block" : "none";
+    state.ui.hoverVideo.style.display = mode === "video" ? "block" : "none";
+    state.ui.hoverLiveHost.style.display = mode === "live" ? "block" : "none";
+  }
+
+  function updateHoverInteractivity() {
+    state.ui.hoverWrap.classList.toggle(
+      "is-interactive",
+      state.hover.previewMode !== "image",
+    );
+  }
+
   function applyHoverSize() {
     const naturalW = state.hover.naturalW || CONFIG.hover.fallbackWidth;
     const naturalH = state.hover.naturalH || CONFIG.hover.fallbackHeight;
@@ -968,6 +1261,10 @@
 
     state.ui.hoverImg.style.width = `${size.width}px`;
     state.ui.hoverImg.style.height = `${size.height}px`;
+    state.ui.hoverVideo.style.width = `${size.width}px`;
+    state.ui.hoverVideo.style.height = `${size.height}px`;
+    state.ui.hoverLiveHost.style.width = `${size.width}px`;
+    state.ui.hoverLiveHost.style.height = `${size.height}px`;
 
     const chrome = (CONFIG.hover.padding * 2) + (CONFIG.hover.borderWidth * 2);
     state.hover.wrapW = size.width + chrome;
@@ -1550,24 +1847,31 @@
     return null;
   }
 
+  function findHoverCandidate(start, clientX, clientY) {
+    const videoCandidate = findHoverVideoCandidate(start, clientX, clientY);
+    if (videoCandidate) return videoCandidate;
+
+    const imageCandidate = findImageCandidate(start, clientX, clientY);
+    if (imageCandidate) {
+      return { ...imageCandidate, previewMode: "image" };
+    }
+
+    return null;
+  }
+
   function findPopoutCandidate(start, clientX, clientY) {
     if (!(start instanceof Element)) return null;
     if (isInsideUserscriptUi(start)) return null;
 
-    const video = start.closest("video");
-    if (video) {
-      const videoUrl = pickBestVideoUrl(video);
-      if (videoUrl) {
-        return { element: video, type: "video", url: videoUrl };
-      }
-    }
+    const videoCandidate = findPopoutVideoCandidate(start, clientX, clientY);
+    if (videoCandidate) return videoCandidate;
 
     const imageCandidate = findImageCandidate(start, clientX, clientY);
     if (imageCandidate) {
       return { ...imageCandidate, type: "image" };
     }
 
-    for (let element = start; element; element = element.parentElement) {
+    for (const element of getElementPathAtPoint(start, clientX, clientY)) {
       if (element.matches?.("a[href]")) {
         const href = element.getAttribute("href") || "";
         const mediaViewerVideoUrl = pickWikimediaMediaViewerAssetUrl(
@@ -1587,12 +1891,113 @@
     return null;
   }
 
+  function findHoverVideoCandidate(start, clientX, clientY) {
+    if (!(start instanceof Element)) return null;
+    if (isInsideUserscriptUi(start)) return null;
+
+    for (const element of getElementPathAtPoint(start, clientX, clientY)) {
+      if (element instanceof HTMLVideoElement) {
+        const candidate = buildHoverVideoCandidate(element);
+        if (candidate) return candidate;
+      }
+
+      if (element.matches?.("a[href]")) {
+        const href = element.getAttribute("href") || "";
+        if (isLikelyVideoUrl(href)) {
+          return {
+            element,
+            hoverTarget: element,
+            type: "video",
+            previewMode: "video",
+            url: resolveUrl(href),
+            currentTime: 0,
+            shouldPlay: false,
+            fallbackUrl: "",
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function findPopoutVideoCandidate(start, clientX, clientY) {
+    if (!(start instanceof Element)) return null;
+    if (isInsideUserscriptUi(start)) return null;
+
+    for (const element of getElementPathAtPoint(start, clientX, clientY)) {
+      if (element instanceof HTMLVideoElement) {
+        const videoUrl = pickBestVideoUrl(element);
+        if (videoUrl) {
+          return { element, type: "video", url: videoUrl };
+        }
+      }
+
+      if (element.matches?.("a[href]")) {
+        const href = element.getAttribute("href") || "";
+        if (isLikelyVideoUrl(href)) {
+          return { element, type: "video", url: resolveUrl(href) };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function getElementsAtPoint(start, clientX, clientY) {
+    const elements = [];
+    const seen = new Set();
+
+    const push = (element) => {
+      if (!(element instanceof Element) || seen.has(element)) return;
+      seen.add(element);
+      elements.push(element);
+    };
+
+    push(start);
+
+    if (
+      typeof clientX === "number" &&
+      typeof clientY === "number" &&
+      typeof document.elementsFromPoint === "function"
+    ) {
+      for (const element of document.elementsFromPoint(clientX, clientY)) {
+        push(element);
+      }
+    } else if (typeof clientX === "number" && typeof clientY === "number") {
+      push(document.elementFromPoint(clientX, clientY));
+    }
+
+    return elements;
+  }
+
+  function getElementPathAtPoint(start, clientX, clientY) {
+    const path = [];
+    const seen = new Set();
+
+    for (const baseElement of getElementsAtPoint(start, clientX, clientY)) {
+      for (let element = baseElement; element; element = element.parentElement) {
+        if (seen.has(element)) break;
+        seen.add(element);
+        path.push(element);
+      }
+    }
+
+    return path;
+  }
+
   function isInsideUserscriptUi(element) {
+    if (!(element instanceof Element)) return false;
     return Boolean(
       element.closest?.(
         `#${IDS.overlay}, #${IDS.hoverWrap}, #${IDS.hoverToast}`,
       ),
     );
+  }
+
+  function isHoverWrapTarget(element) {
+    if (!(element instanceof Element)) return false;
+    return Boolean(element.closest?.(`#${IDS.hoverWrap}`));
   }
 
   function isTargetLargeEnough(element) {
@@ -1623,6 +2028,66 @@
     if (!imageUrl) return null;
 
     return { element: image, url: imageUrl };
+  }
+
+  function buildHoverVideoCandidate(video) {
+    if (!(video instanceof HTMLVideoElement)) return null;
+
+    const videoUrl = pickBestVideoUrl(video);
+    const fallbackUrl = pickVideoPreviewUrl(video);
+    const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const shouldPlay = !video.paused && !video.ended;
+
+    if (isReplayableHoverVideoUrl(videoUrl)) {
+      return {
+        element: video,
+        hoverTarget: video,
+        type: "video",
+        previewMode: "video",
+        url: videoUrl,
+        currentTime,
+        shouldPlay,
+        fallbackUrl,
+      };
+    }
+
+    const liveElement = findLiveHoverVideoElement(video);
+    if (liveElement) {
+      return {
+        element: video,
+        hoverTarget: video,
+        type: "video",
+        previewMode: "live",
+        url: videoUrl,
+        currentTime,
+        shouldPlay,
+        fallbackUrl,
+        liveElement,
+      };
+    }
+
+    if (!fallbackUrl) return null;
+
+    return {
+      element: video,
+      hoverTarget: video,
+      type: "image",
+      previewMode: "image",
+      url: fallbackUrl,
+    };
+  }
+
+  function isReplayableHoverVideoUrl(url) {
+    return Boolean(
+      url &&
+      !url.startsWith("blob:") &&
+      !url.startsWith("mediasource:"),
+    );
+  }
+
+  function findLiveHoverVideoElement(video) {
+    if (!(video instanceof HTMLVideoElement)) return null;
+    return video;
   }
 
   function findNestedImageAtPoint(element, clientX, clientY) {
@@ -1690,6 +2155,46 @@
     }
 
     return current;
+  }
+
+  function pickVideoPreviewUrl(video) {
+    if (!(video instanceof HTMLVideoElement)) return "";
+
+    const posterUrl = resolveUrl(video.getAttribute("poster") || video.poster || "");
+    if (posterUrl) return posterUrl;
+
+    const cachedFrameUrl = VIDEO_PREVIEW_CACHE.get(video);
+    if (cachedFrameUrl) return cachedFrameUrl;
+
+    const frameUrl = captureVideoFrameUrl(video);
+    if (frameUrl) {
+      VIDEO_PREVIEW_CACHE.set(video, frameUrl);
+      return frameUrl;
+    }
+
+    return "";
+  }
+
+  function captureVideoFrameUrl(video) {
+    if (!(video instanceof HTMLVideoElement)) return "";
+
+    const width = Math.round(video.videoWidth || video.clientWidth || 0);
+    const height = Math.round(video.videoHeight || video.clientHeight || 0);
+    if (!width || !height) return "";
+
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+
+      const context = canvas.getContext("2d");
+      if (!context) return "";
+
+      context.drawImage(video, 0, 0, width, height);
+      return canvas.toDataURL("image/jpeg", 0.92);
+    } catch {
+      return "";
+    }
   }
 
   function extractQualityScore(value) {
