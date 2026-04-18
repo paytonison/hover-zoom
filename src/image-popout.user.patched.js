@@ -36,7 +36,15 @@
   const STORAGE_KEY = "image_popout_safari_v2";
   const BACKGROUND_IMAGE_SELECTOR =
     "div, span, a, button, figure, section, article, li";
-  const NESTED_IMAGE_CONTAINER_SELECTOR = "a, figure, picture, span";
+  const NESTED_IMAGE_CONTAINER_SELECTOR = [
+    "a",
+    "figure",
+    "picture",
+    "span",
+    ".mw-mmv-image-wrapper",
+    ".mw-mmv-image-inner-wrapper",
+    ".mw-mmv-image",
+  ].join(", ");
   const LAZY_IMAGE_ATTRS = [
     "data-src",
     "data-original",
@@ -539,6 +547,7 @@
       capture: true,
       passive: true,
     });
+    window.addEventListener("hashchange", onWindowHashChange, true);
     window.addEventListener("blur", onWindowBlur);
     document.addEventListener("mouseleave", onDocumentMouseLeave, true);
   }
@@ -761,6 +770,11 @@
     } else {
       hideHover();
     }
+  }
+
+  function onWindowHashChange() {
+    state.hover.lastEventTarget = null;
+    if (!state.hover.pinned) hideHover();
   }
 
   function onWindowBlur() {
@@ -1469,8 +1483,9 @@
 
       if (element.matches?.("a[href]")) {
         const href = element.getAttribute("href") || "";
-        if (isLikelyImageUrl(href)) {
-          return { element, url: resolveUrl(href) };
+        const linkedImageUrl = pickLinkedImageUrl(href);
+        if (linkedImageUrl) {
+          return { element, url: linkedImageUrl };
         }
       }
 
@@ -1505,6 +1520,14 @@
     for (let element = start; element; element = element.parentElement) {
       if (element.matches?.("a[href]")) {
         const href = element.getAttribute("href") || "";
+        const mediaViewerVideoUrl = pickWikimediaMediaViewerAssetUrl(
+          href,
+          "video",
+        );
+        if (mediaViewerVideoUrl) {
+          return { element, type: "video", url: mediaViewerVideoUrl };
+        }
+
         if (isLikelyVideoUrl(href)) {
           return { element, type: "video", url: resolveUrl(href) };
         }
@@ -1540,12 +1563,13 @@
   function buildImageCandidate(image) {
     if (!(image instanceof HTMLImageElement)) return null;
 
+    const imageUrl = pickBestImageUrl(image);
     const linkedUrl = image.closest("a[href]")?.getAttribute("href") || "";
-    if (isLikelyImageUrl(linkedUrl)) {
-      return { element: image, url: resolveUrl(linkedUrl) };
+    const linkedImageUrl = pickLinkedImageUrl(linkedUrl, imageUrl);
+    if (linkedImageUrl) {
+      return { element: image, url: linkedImageUrl };
     }
 
-    const imageUrl = pickBestImageUrl(image);
     if (!imageUrl) return null;
 
     return { element: image, url: imageUrl };
@@ -1678,6 +1702,26 @@
     }
   }
 
+  function pickLinkedImageUrl(url, fallbackUrl = "") {
+    if (!url) return "";
+
+    const mediaViewerUrl = pickWikimediaMediaViewerAssetUrl(url, "image");
+    if (mediaViewerUrl) {
+      return fallbackUrl || mediaViewerUrl;
+    }
+
+    if (!isLikelyImageUrl(url)) return "";
+
+    const resolvedUrl = resolveUrl(url);
+    if (!resolvedUrl) return "";
+
+    if (isWikimediaFilePageUrl(resolvedUrl)) {
+      return fallbackUrl || "";
+    }
+
+    return resolvedUrl;
+  }
+
   function isLikelyImageUrl(url) {
     if (!url) return false;
     if (url.startsWith("data:image/")) return true;
@@ -1690,6 +1734,91 @@
     } catch {
       return false;
     }
+  }
+
+  function isWikimediaFilePageUrl(url) {
+    if (!url) return false;
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      const host = parsed.hostname.toLowerCase();
+      if (!isWikimediaProjectHost(host)) return false;
+
+      const title = parsed.searchParams.get("title") || "";
+      if (/^(File|Media):/i.test(title)) return true;
+
+      if (!parsed.pathname.startsWith("/wiki/")) return false;
+      const pageTitle = parsed.pathname.slice("/wiki/".length);
+      return /^(File|Media):/i.test(pageTitle);
+    } catch {
+      return false;
+    }
+  }
+
+  function pickWikimediaMediaViewerAssetUrl(url, mediaType) {
+    if (!url || !mediaType) return "";
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      if (!isWikimediaProjectHost(parsed.hostname.toLowerCase())) return "";
+
+      const fileName = extractWikimediaMediaViewerFileName(parsed.hash || "");
+      if (!fileName) return "";
+
+      if (mediaType === "image" && !isLikelyImageUrl(fileName)) return "";
+      if (mediaType === "video" && !isLikelyVideoUrl(fileName)) return "";
+
+      return `${parsed.origin}/wiki/Special:Redirect/file/${encodeURIComponent(fileName)}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function extractWikimediaMediaViewerFileName(hash) {
+    if (!hash) return "";
+
+    for (const variant of getHashVariants(hash)) {
+      const match = variant.match(/^#\/?media\/(?:File|Media):(.+)$/i);
+      if (!match) continue;
+
+      const fileName = sanitizeWikimediaFileName(match[1]);
+      if (fileName) return fileName;
+    }
+
+    return "";
+  }
+
+  function getHashVariants(hash) {
+    const variants = [];
+    if (hash) variants.push(hash);
+
+    const withoutHash = hash.startsWith("#") ? hash.slice(1) : hash;
+    const decoded = safeDecodeURIComponent(withoutHash);
+    if (decoded && decoded !== withoutHash) {
+      variants.push(decoded.startsWith("#") ? decoded : `#${decoded}`);
+    }
+
+    return variants;
+  }
+
+  function sanitizeWikimediaFileName(value) {
+    const rawName = String(value).split(/[?#]/, 1)[0].trim();
+    if (!rawName) return "";
+    return safeDecodeURIComponent(rawName).replace(/\s+/g, "_");
+  }
+
+  function safeDecodeURIComponent(value) {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  function isWikimediaProjectHost(host) {
+    return /(\.|^)(wikipedia|wikibooks|wikidata|wikimedia|wikinews|wikiquote|wikisource|wikiversity|wikivoyage|wiktionary|mediawiki)\.org$/.test(
+      host,
+    );
   }
 
   function isLikelyVideoUrl(url) {
