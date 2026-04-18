@@ -34,6 +34,7 @@
   };
 
   const STORAGE_KEY = "image_popout_safari_v2";
+  const CONTEXT_MENU_SUPPRESSION_MS = 2000;
   const BACKGROUND_IMAGE_SELECTOR =
     "div, span, a, button, figure, section, article, li";
   const NESTED_IMAGE_CONTAINER_SELECTOR = [
@@ -135,6 +136,7 @@
     },
     input: {
       suppressClick: false,
+      suppressClickUntil: 0,
     },
     ui: {
       overlay: null,
@@ -576,10 +578,7 @@
   function onDocumentClick(event) {
     if (!(event instanceof MouseEvent)) return;
 
-    const suppressClick = state.input.suppressClick;
-    state.input.suppressClick = false;
-
-    if (suppressClick) return;
+    if (shouldSuppressDocumentClick()) return;
     if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
 
     if (event.altKey) {
@@ -593,20 +592,43 @@
   function onDocumentMouseDown(event) {
     if (!(event instanceof MouseEvent)) return;
 
-    state.input.suppressClick = (
-      event.button !== 0 ||
-      event.ctrlKey ||
-      event.metaKey
+    const plainPrimaryClick = (
+      event.button === 0 &&
+      !event.ctrlKey &&
+      !event.metaKey
     );
+
+    if (!plainPrimaryClick) {
+      state.input.suppressClick = true;
+      return;
+    }
+
+    if (state.input.suppressClickUntil > Date.now()) {
+      state.input.suppressClick = true;
+      return;
+    }
+
+    state.input.suppressClick = false;
   }
 
   function onDocumentContextMenu(event) {
     if (!(event instanceof MouseEvent)) return;
 
-    // Safari can still emit a click after a secondary-click gesture.
+    // Safari can emit a delayed left-click after the context menu interaction.
     state.input.suppressClick = true;
+    state.input.suppressClickUntil = Date.now() + CONTEXT_MENU_SUPPRESSION_MS;
   }
 
+  function shouldSuppressDocumentClick() {
+    const suppressClick = (
+      state.input.suppressClick ||
+      state.input.suppressClickUntil > Date.now()
+    );
+
+    state.input.suppressClick = false;
+    state.input.suppressClickUntil = 0;
+    return suppressClick;
+  }
   function onDocumentMouseMove(event) {
     state.hover.mouseX = event.clientX;
     state.hover.mouseY = event.clientY;
