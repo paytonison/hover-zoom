@@ -133,6 +133,9 @@
       resize: null,
       toastTimer: 0,
     },
+    input: {
+      suppressClick: false,
+    },
     ui: {
       overlay: null,
       popoutWindow: null,
@@ -538,7 +541,9 @@
       capture: true,
       passive: true,
     });
+    document.addEventListener("mousedown", onDocumentMouseDown, true);
     document.addEventListener("click", onDocumentClick, true);
+    document.addEventListener("contextmenu", onDocumentContextMenu, true);
     window.addEventListener("keydown", onWindowKeyDown, true);
     window.addEventListener("pointermove", onWindowPointerMove, true);
     window.addEventListener("pointerup", onWindowPointerUp, true);
@@ -570,7 +575,12 @@
 
   function onDocumentClick(event) {
     if (!(event instanceof MouseEvent)) return;
-    if (event.button !== 0) return;
+
+    const suppressClick = state.input.suppressClick;
+    state.input.suppressClick = false;
+
+    if (suppressClick) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
 
     if (event.altKey) {
       handleAltClick(event);
@@ -578,6 +588,23 @@
     }
 
     handlePinClick(event);
+  }
+
+  function onDocumentMouseDown(event) {
+    if (!(event instanceof MouseEvent)) return;
+
+    state.input.suppressClick = (
+      event.button !== 0 ||
+      event.ctrlKey ||
+      event.metaKey
+    );
+  }
+
+  function onDocumentContextMenu(event) {
+    if (!(event instanceof MouseEvent)) return;
+
+    // Safari can still emit a click after a secondary-click gesture.
+    state.input.suppressClick = true;
   }
 
   function onDocumentMouseMove(event) {
@@ -805,6 +832,7 @@
 
   function handlePinClick(event) {
     if (!state.hover.enabled || state.popout.open) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
 
     const candidate = findImageCandidate(
       event.target,
