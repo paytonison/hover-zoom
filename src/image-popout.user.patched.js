@@ -629,7 +629,6 @@
     state.input.suppressClickUntil = 0;
     return suppressClick;
   }
-
   function onDocumentMouseMove(event) {
     state.hover.mouseX = event.clientX;
     state.hover.mouseY = event.clientY;
