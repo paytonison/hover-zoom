@@ -2,7 +2,7 @@
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
 // @version      1.0.0
-// @description  Hover images or videos for a near-cursor preview. Click pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
+// @description  Hover images or videos for a near-cursor preview. Video clicks pin, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
@@ -907,6 +907,7 @@
       event.clientY,
     );
     if (!candidate || !isTargetLargeEnough(candidate.element)) return;
+    if (!isClickPinnableCandidate(candidate)) return;
 
     if (
       candidate.element !== state.hover.target ||
@@ -917,6 +918,18 @@
     }
 
     toggleHoverPinned();
+  }
+
+  function isClickPinnableCandidate(candidate) {
+    if (!candidate) return false;
+
+    return (
+      candidate.type === "video" ||
+      candidate.previewMode === "video" ||
+      candidate.previewMode === "live" ||
+      candidate.element instanceof HTMLVideoElement ||
+      candidate.hoverTarget instanceof HTMLVideoElement
+    );
   }
 
   function toggleHoverPinned() {

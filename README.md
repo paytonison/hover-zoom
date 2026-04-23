@@ -5,14 +5,14 @@ and opens a movable popout window for images or videos with Alt/Option-click.
 
 ## Current repo contents
 
-- `src/image-popout.user.patched.js`: the only source file and the userscript
+- `src/Image Popout (Safari)-1.0.0.user.js`: the only source file and the userscript
   you install.
 - `README.md`: installation, controls, and development notes.
 
 ## What the script does
 
 - Previews large enough images near the cursor while you hover.
-- Pins or unpins the current preview on click or with `P`.
+- Pins or unpins video previews on click, or any current preview with `P`.
 - Toggles hover previews with `Z` and stores that preference in
   `localStorage` under `image_popout_safari_v2`.
 - Closes the preview and any open popout with `Esc`.
@@ -46,7 +46,7 @@ The script currently matches all `http` and `https` pages:
 | Action | Result |
 | --- | --- |
 | Hover a supported image target | Show the near-cursor preview |
-| Click the hovered target | Pin or unpin the preview |
+| Click the hovered video target | Pin or unpin the preview |
 | `P` | Pin or unpin the preview |
 | `Z` | Turn hover previews on or off |
 | `Esc` | Hide the preview and close the popout |
