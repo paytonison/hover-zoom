@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      1.0.0
+// @version      1.1
 // @description  Hover images or videos for a near-cursor preview. Click pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -110,6 +110,31 @@
     "webp",
   ]);
   const VIDEO_PREVIEW_CACHE = new WeakMap();
+  const INSTAGRAM_APP_ID = "936619743392459";
+  const INSTAGRAM_RESERVED_PATH_SEGMENTS = new Set([
+    "about",
+    "accounts",
+    "api",
+    "developer",
+    "direct",
+    "directory",
+    "explore",
+    "legal",
+    "login",
+    "oauth",
+    "p",
+    "reel",
+    "reels",
+    "stories",
+    "tv",
+  ]);
+  const INSTAGRAM_PROFILE_TAB_SEGMENTS = new Set([
+    "guides",
+    "reels",
+    "tagged",
+  ]);
+  const INSTAGRAM_PROFILE_CACHE = new Map();
+  const INSTAGRAM_EMBED_CACHE = new Map();
 
   const state = {
     hover: {
@@ -132,6 +157,7 @@
       videoCurrentTime: 0,
       videoShouldPlay: false,
       live: null,
+      resolveToken: 0,
       toastTimer: 0,
     },
     popout: {
@@ -140,6 +166,7 @@
       mediaType: "image",
       autoFit: true,
       loadToken: 0,
+      resolveToken: 0,
       drag: null,
       resize: null,
       toastTimer: 0,
@@ -935,8 +962,9 @@
     showHoverToast(state.hover.pinned ? "Pinned preview" : "Unpinned");
   }
 
-  function activateHover(candidate, mouseX, mouseY) {
+  function activateHover(candidate, mouseX, mouseY, options = {}) {
     const previewMode = candidate.previewMode || "image";
+    if (!options.skipResolve) state.hover.resolveToken += 1;
 
     state.hover.url = candidate.url || "";
     state.hover.previewMode = previewMode;
@@ -976,9 +1004,11 @@
     }
 
     updateHoverPosition(mouseX, mouseY);
+    if (!options.skipResolve) void maybeUpgradeHoverCandidate(candidate);
   }
 
   function hideHover() {
+    state.hover.resolveToken += 1;
     cancelHoverPositionFrame();
     teardownHoverLiveElement();
     clearHoverVideo();
@@ -1330,6 +1360,10 @@
   }
 
   function openPopout(media) {
+    openPopoutMedia(media);
+  }
+
+  function openPopoutMedia(media, options = {}) {
     const mediaUrl =
       typeof media === "string"
         ? media
@@ -1338,24 +1372,29 @@
           : "";
     const mediaType =
       typeof media === "object" && media?.type === "video" ? "video" : "image";
+    const preserveLayout = options.preserveLayout === true;
+    const skipResolve = options.skipResolve === true;
 
     if (!mediaUrl) return;
 
     state.popout.open = true;
     state.popout.url = mediaUrl;
     state.popout.mediaType = mediaType;
-    state.popout.autoFit = true;
     state.ui.popoutTitle.textContent = mediaUrl;
     state.ui.overlay.classList.add("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
+    if (!skipResolve) state.popout.resolveToken += 1;
 
-    const initialRect = getInitialPopoutRect();
-    setPopoutRect(
-      initialRect.left,
-      initialRect.top,
-      initialRect.width,
-      initialRect.height,
-    );
+    if (!preserveLayout) {
+      state.popout.autoFit = true;
+      const initialRect = getInitialPopoutRect();
+      setPopoutRect(
+        initialRect.left,
+        initialRect.top,
+        initialRect.width,
+        initialRect.height,
+      );
+    }
 
     const token = ++state.popout.loadToken;
     const img = state.ui.popoutImg;
@@ -1386,6 +1425,7 @@
       };
 
       video.load();
+      if (!skipResolve) void maybeUpgradePopoutCandidate(media);
       return;
     }
 
@@ -1412,11 +1452,13 @@
 
     img.removeAttribute("src");
     img.src = mediaUrl;
+    if (!skipResolve) void maybeUpgradePopoutCandidate(media);
   }
 
   function closePopout() {
     if (!state.popout.open) return;
     state.popout.open = false;
+    state.popout.resolveToken += 1;
     state.popout.drag = null;
     state.popout.resize = null;
     state.ui.popoutVideo.pause();
@@ -1868,7 +1910,10 @@
 
     const imageCandidate = findImageCandidate(start, clientX, clientY);
     if (imageCandidate) {
-      return { ...imageCandidate, previewMode: "image" };
+      return attachInstagramInfo({
+        ...imageCandidate,
+        previewMode: "image",
+      });
     }
 
     return null;
@@ -1879,11 +1924,11 @@
     if (isInsideUserscriptUi(start)) return null;
 
     const videoCandidate = findPopoutVideoCandidate(start, clientX, clientY);
-    if (videoCandidate) return videoCandidate;
+    if (videoCandidate) return attachInstagramInfo(videoCandidate);
 
     const imageCandidate = findImageCandidate(start, clientX, clientY);
     if (imageCandidate) {
-      return { ...imageCandidate, type: "image" };
+      return attachInstagramInfo({ ...imageCandidate, type: "image" });
     }
 
     for (const element of getElementPathAtPoint(start, clientX, clientY)) {
@@ -1894,11 +1939,19 @@
           "video",
         );
         if (mediaViewerVideoUrl) {
-          return { element, type: "video", url: mediaViewerVideoUrl };
+          return attachInstagramInfo({
+            element,
+            type: "video",
+            url: mediaViewerVideoUrl,
+          });
         }
 
         if (isLikelyVideoUrl(href)) {
-          return { element, type: "video", url: resolveUrl(href) };
+          return attachInstagramInfo({
+            element,
+            type: "video",
+            url: resolveUrl(href),
+          });
         }
       }
     }
@@ -2224,6 +2277,60 @@
     }
   }
 
+  async function maybeUpgradeHoverCandidate(candidate) {
+    if (!candidate?.instagramInfo) return;
+
+    const token = state.hover.resolveToken;
+    const activeTarget = candidate.hoverTarget || candidate.element;
+    const resolvedCandidate = await resolveInstagramCandidate(candidate);
+    if (!resolvedCandidate) return;
+    if (token !== state.hover.resolveToken) return;
+    if (!isHoverVisible()) return;
+    if (activeTarget && state.hover.target !== activeTarget) return;
+
+    const nextPreviewMode = resolvedCandidate.previewMode || "image";
+    if (
+      resolvedCandidate.url === state.hover.url &&
+      nextPreviewMode === state.hover.previewMode
+    ) {
+      return;
+    }
+
+    activateHover(
+      resolvedCandidate,
+      state.hover.mouseX,
+      state.hover.mouseY,
+      { skipResolve: true },
+    );
+  }
+
+  async function maybeUpgradePopoutCandidate(candidate) {
+    if (!candidate?.instagramInfo) return;
+
+    const token = state.popout.resolveToken;
+    const initialUrl =
+      typeof candidate === "string"
+        ? candidate
+        : typeof candidate?.url === "string"
+          ? candidate.url
+          : "";
+    const resolvedCandidate = await resolveInstagramCandidate(candidate);
+    if (!resolvedCandidate) return;
+    if (token !== state.popout.resolveToken) return;
+    if (!state.popout.open || state.popout.url !== initialUrl) return;
+    if (
+      resolvedCandidate.url === state.popout.url &&
+      (resolvedCandidate.type || "image") === state.popout.mediaType
+    ) {
+      return;
+    }
+
+    openPopoutMedia(resolvedCandidate, {
+      preserveLayout: true,
+      skipResolve: true,
+    });
+  }
+
   function extractQualityScore(value) {
     if (!value) return 0;
     const match = String(value).toLowerCase().match(/(\d{3,4})\s*p?/);
@@ -2424,6 +2531,406 @@
     } catch {
       return normalizeKnownImageUrl(url);
     }
+  }
+
+  function attachInstagramInfo(candidate) {
+    if (!candidate || !isInstagramHost(window.location.hostname)) return candidate;
+
+    const info = getInstagramCandidateInfo(
+      candidate.element,
+      candidate.url || candidate.fallbackUrl || "",
+    );
+    if (!info) return candidate;
+
+    return { ...candidate, instagramInfo: info };
+  }
+
+  function getInstagramCandidateInfo(element, url) {
+    const linkInfo = getInstagramLinkInfo(element);
+    if (linkInfo) {
+      return {
+        kind: "media",
+        username: getInstagramCurrentProfileUsername(),
+        ...linkInfo,
+      };
+    }
+
+    const username = getInstagramCurrentProfileUsername();
+    if (username && isInstagramProfilePictureElement(element, url)) {
+      return { kind: "profile_pic", username };
+    }
+
+    return null;
+  }
+
+  function isInstagramHost(host) {
+    return /(^|\.)instagram\.com$/i.test(host || "");
+  }
+
+  function isInstagramMediaUrl(url) {
+    if (!url) return false;
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      return /(^|\.)cdninstagram\.com$/i.test(parsed.hostname);
+    } catch {
+      return false;
+    }
+  }
+
+  function getInstagramCurrentProfileUsername() {
+    if (!isInstagramHost(window.location.hostname)) return "";
+
+    const segments = window.location.pathname.split("/").filter(Boolean);
+    if (!segments.length) return "";
+
+    const username = segments[0];
+    if (INSTAGRAM_RESERVED_PATH_SEGMENTS.has(username.toLowerCase())) return "";
+    if (segments.length === 1) return username;
+
+    const tab = segments[1]?.toLowerCase?.() || "";
+    return INSTAGRAM_PROFILE_TAB_SEGMENTS.has(tab) ? username : "";
+  }
+
+  function isInstagramProfilePictureElement(element, url) {
+    return Boolean(
+      element instanceof HTMLImageElement &&
+      element.closest("header") &&
+      isInstagramMediaUrl(url),
+    );
+  }
+
+  function getInstagramLinkInfo(element) {
+    if (!(element instanceof Element)) return null;
+
+    const href = element.closest("a[href]")?.getAttribute("href") || "";
+    if (!href) return null;
+
+    try {
+      const parsed = new URL(href, window.location.href);
+      if (!isInstagramHost(parsed.hostname)) return null;
+
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      if (segments.length < 2) return null;
+
+      const rawKind = (segments[0] || "").toLowerCase();
+      const shortcode = segments[1] || "";
+      if (!shortcode) return null;
+      if (!["p", "reel", "reels", "tv"].includes(rawKind)) return null;
+
+      return {
+        shortcode,
+        kindHint: rawKind === "reels" ? "reel" : rawKind,
+        imgIndex: Math.max(1, Number(parsed.searchParams.get("img_index")) || 1),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async function resolveInstagramCandidate(candidate) {
+    const info = candidate?.instagramInfo;
+    if (!info) return null;
+
+    try {
+      if (info.kind === "profile_pic") {
+        const profile = await getInstagramProfileData(info.username);
+        const profilePicUrl = resolveUrl(profile?.profilePicUrl || "");
+        if (!profilePicUrl) return null;
+
+        return {
+          ...candidate,
+          type: "image",
+          previewMode: "image",
+          url: profilePicUrl,
+        };
+      }
+
+      if (info.kind !== "media") return null;
+
+      let media = null;
+      if (info.username) {
+        try {
+          const profile = await getInstagramProfileData(info.username);
+          media = getInstagramMediaFromProfile(
+            profile,
+            info.shortcode,
+            info.imgIndex,
+          );
+        } catch {}
+      }
+
+      if (!media) {
+        media = await getInstagramMediaFromEmbed(
+          info.shortcode,
+          info.kindHint,
+          info.imgIndex,
+        );
+      }
+      if (!media?.url) return null;
+
+      return {
+        ...candidate,
+        type: media.type,
+        previewMode: media.type === "video" ? "video" : "image",
+        url: media.url,
+        fallbackUrl: media.fallbackUrl || candidate.fallbackUrl || "",
+        currentTime: 0,
+        shouldPlay: false,
+      };
+    } catch (error) {
+      console.warn("[Image Popout] Instagram media resolution failed:", error);
+      return null;
+    }
+  }
+
+  async function getInstagramProfileData(username) {
+    const normalizedUsername = String(username || "").trim().toLowerCase();
+    if (!normalizedUsername) return null;
+
+    let cached = INSTAGRAM_PROFILE_CACHE.get(normalizedUsername);
+    if (cached) return cached;
+
+    cached = fetchJsonFromPage(
+      `/api/v1/users/web_profile_info/?username=${encodeURIComponent(normalizedUsername)}`,
+      { "x-ig-app-id": INSTAGRAM_APP_ID },
+    )
+      .then((payload) => buildInstagramProfileData(payload))
+      .catch((error) => {
+        INSTAGRAM_PROFILE_CACHE.delete(normalizedUsername);
+        throw error;
+      });
+
+    INSTAGRAM_PROFILE_CACHE.set(normalizedUsername, cached);
+    return cached;
+  }
+
+  function buildInstagramProfileData(payload) {
+    const user = payload?.data?.user;
+    if (!user) return null;
+
+    const nodesByShortcode = new Map();
+    for (const edge of user.edge_owner_to_timeline_media?.edges || []) {
+      const node = edge?.node;
+      if (node?.shortcode) {
+        nodesByShortcode.set(node.shortcode, node);
+      }
+    }
+
+    return {
+      profilePicUrl: resolveUrl(user.profile_pic_url_hd || user.profile_pic_url || ""),
+      nodesByShortcode,
+    };
+  }
+
+  function getInstagramMediaFromProfile(profile, shortcode, imgIndex) {
+    if (!profile?.nodesByShortcode || !shortcode) return null;
+    const node = profile.nodesByShortcode.get(shortcode);
+    return buildInstagramResolvedMedia(node, imgIndex);
+  }
+
+  async function getInstagramMediaFromEmbed(shortcode, kindHint, imgIndex) {
+    const kinds =
+      kindHint === "reel"
+        ? ["reel", "p"]
+        : kindHint === "tv"
+          ? ["tv", "p"]
+          : ["p", "reel"];
+
+    for (const kind of kinds) {
+      const cacheKey = `${kind}:${shortcode}:${Math.max(1, Number(imgIndex) || 1)}`;
+      let cached = INSTAGRAM_EMBED_CACHE.get(cacheKey);
+      if (!cached) {
+        cached = fetchInstagramEmbedMedia(shortcode, kind, imgIndex).catch((error) => {
+          INSTAGRAM_EMBED_CACHE.delete(cacheKey);
+          throw error;
+        });
+        INSTAGRAM_EMBED_CACHE.set(cacheKey, cached);
+      }
+
+      let media = null;
+      try {
+        media = await cached;
+      } catch {
+        continue;
+      }
+      if (media?.url) return media;
+    }
+
+    return null;
+  }
+
+  async function fetchInstagramEmbedMedia(shortcode, kindHint, imgIndex) {
+    const kind = kindHint === "reel" || kindHint === "tv" ? kindHint : "p";
+    const query = imgIndex > 1 ? `?img_index=${encodeURIComponent(imgIndex)}` : "";
+    const html = await fetchTextFromPage(
+      `/${kind}/${encodeURIComponent(shortcode)}/embed/${query}`,
+    );
+    return parseInstagramEmbedMedia(html);
+  }
+
+  function parseInstagramEmbedMedia(html) {
+    if (!html) return null;
+
+    const videoUrl = resolveUrl(extractInstagramEmbeddedValue(html, "video_url"));
+    const displayUrl = resolveUrl(extractInstagramEmbeddedValue(html, "display_url"));
+    const thumbnailUrl = resolveUrl(extractInstagramEmbeddedValue(html, "thumbnail_src"));
+
+    if (videoUrl) {
+      return {
+        type: "video",
+        url: videoUrl,
+        fallbackUrl: displayUrl || thumbnailUrl || "",
+      };
+    }
+
+    if (displayUrl) {
+      return { type: "image", url: displayUrl, fallbackUrl: "" };
+    }
+
+    if (thumbnailUrl) {
+      return { type: "image", url: thumbnailUrl, fallbackUrl: "" };
+    }
+
+    return null;
+  }
+
+  function extractInstagramEmbeddedValue(source, key) {
+    if (!source || !key) return "";
+
+    const escapedKey = escapeRegex(key);
+    const patterns = [
+      new RegExp(`\\\\"${escapedKey}\\\\":\\\\"([\\s\\S]+?)\\\\"`),
+      new RegExp(`"${escapedKey}":"([\\s\\S]+?)"`),
+    ];
+
+    for (const pattern of patterns) {
+      const match = source.match(pattern);
+      if (!match?.[1]) continue;
+
+      const decoded = decodeJsonStringFragment(match[1]);
+      if (decoded) return decoded;
+    }
+
+    return "";
+  }
+
+  function decodeJsonStringFragment(value) {
+    if (!value) return "";
+
+    try {
+      return JSON.parse(`"${value}"`)
+        .replace(/\\\//g, "/")
+        .replace(/\\u0026/gi, "&")
+        .replace(/\\u00253D/gi, "%3D");
+    } catch {
+      return value
+        .replace(/\\\//g, "/")
+        .replace(/\\u0026/gi, "&")
+        .replace(/\\u00253D/gi, "%3D");
+    }
+  }
+
+  async function fetchTextFromPage(path, headers = {}) {
+    const url = new URL(path, window.location.origin).href;
+    if (typeof fetch === "function") {
+      const response = await fetch(url, {
+        credentials: "same-origin",
+        headers,
+      });
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+      return response.text();
+    }
+
+    if (typeof GM_xmlhttpRequest !== "function") {
+      throw new Error("No fetch transport available");
+    }
+
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url,
+        headers,
+        anonymous: false,
+        onload: (response) => {
+          const status = Number(response?.status) || 0;
+          if (status && (status < 200 || status >= 400)) {
+            reject(new Error(`Request failed with status ${status}`));
+            return;
+          }
+
+          resolve(String(response?.responseText || ""));
+        },
+        onerror: (error) =>
+          reject(error || new Error("GM_xmlhttpRequest failed")),
+        ontimeout: () => reject(new Error("GM_xmlhttpRequest timeout")),
+      });
+    });
+  }
+
+  async function fetchJsonFromPage(path, headers = {}) {
+    const text = await fetchTextFromPage(path, headers);
+    return JSON.parse(text);
+  }
+
+  function buildInstagramResolvedMedia(node, imgIndex = 1) {
+    const targetNode = pickInstagramMediaNode(node, imgIndex);
+    if (!targetNode) return null;
+
+    const displayUrl =
+      resolveUrl(targetNode.display_url || "") ||
+      resolveUrl(pickLargestInstagramResourceUrl(targetNode.display_resources)) ||
+      resolveUrl(pickLargestInstagramResourceUrl(targetNode.thumbnail_resources)) ||
+      resolveUrl(targetNode.thumbnail_src || "");
+    const videoUrl = resolveUrl(targetNode.video_url || "");
+
+    if (videoUrl) {
+      return {
+        type: "video",
+        url: videoUrl,
+        fallbackUrl: displayUrl || "",
+      };
+    }
+
+    if (displayUrl) {
+      return { type: "image", url: displayUrl, fallbackUrl: "" };
+    }
+
+    return null;
+  }
+
+  function pickInstagramMediaNode(node, imgIndex = 1) {
+    if (!node) return null;
+
+    const sidecarEdges = node.edge_sidecar_to_children?.edges || [];
+    if (!sidecarEdges.length) return node;
+
+    const index = clamp(
+      Math.max(1, Number(imgIndex) || 1) - 1,
+      0,
+      sidecarEdges.length - 1,
+    );
+    return sidecarEdges[index]?.node || sidecarEdges[0]?.node || node;
+  }
+
+  function pickLargestInstagramResourceUrl(resources) {
+    if (!Array.isArray(resources) || !resources.length) return "";
+
+    const sorted = resources
+      .filter((resource) => resource?.src)
+      .sort((a, b) => {
+        const aWidth = Number(a?.config_width) || 0;
+        const bWidth = Number(b?.config_width) || 0;
+        return bWidth - aWidth;
+      });
+
+    return sorted[0]?.src || "";
+  }
+
+  function escapeRegex(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
   function normalizeKnownImageUrl(url) {
