@@ -126,6 +126,7 @@
       wrapW: 320,
       wrapH: 240,
       loadToken: 0,
+      positionRaf: 0,
       lastEventTarget: null,
       fallbackUrl: "",
       videoCurrentTime: 0,
@@ -678,14 +679,6 @@
     state.hover.mouseY = event.clientY;
 
     if (!state.hover.enabled || state.popout.open || state.hover.pinned) return;
-    if (
-      state.hover.interactive &&
-      isHoverWrapTarget(event.target) &&
-      isHoverVisible()
-    ) {
-      state.hover.lastEventTarget = event.target;
-      return;
-    }
 
     if (event.target !== state.hover.lastEventTarget) {
       state.hover.lastEventTarget = event.target;
@@ -954,7 +947,6 @@
       Number.MAX_SAFE_INTEGER,
     );
     state.hover.videoShouldPlay = candidate.shouldPlay === true;
-    state.hover.interactive = previewMode !== "image";
     state.hover.mouseX = mouseX;
     state.hover.mouseY = mouseY;
 
@@ -987,13 +979,13 @@
   }
 
   function hideHover() {
+    cancelHoverPositionFrame();
     teardownHoverLiveElement();
     clearHoverVideo();
     showHoverPreviewMode("image");
     state.hover.target = null;
     state.hover.url = "";
     state.hover.previewMode = "image";
-    state.hover.interactive = false;
     state.hover.fallbackUrl = "";
     state.hover.videoCurrentTime = 0;
     state.hover.videoShouldPlay = false;
@@ -1248,9 +1240,13 @@
   }
 
   function updateHoverInteractivity() {
+    state.hover.interactive = (
+      state.hover.pinned &&
+      state.hover.previewMode !== "image"
+    );
     state.ui.hoverWrap.classList.toggle(
       "is-interactive",
-      state.hover.previewMode !== "image",
+      state.hover.interactive,
     );
   }
 
@@ -1296,6 +1292,25 @@
   }
 
   function updateHoverPosition(mouseX, mouseY) {
+    state.hover.mouseX = mouseX;
+    state.hover.mouseY = mouseY;
+    if (!isHoverVisible()) return;
+    if (state.hover.positionRaf) return;
+
+    state.hover.positionRaf = window.requestAnimationFrame(() => {
+      state.hover.positionRaf = 0;
+      if (!isHoverVisible()) return;
+      positionHoverNow(state.hover.mouseX, state.hover.mouseY);
+    });
+  }
+
+  function cancelHoverPositionFrame() {
+    if (!state.hover.positionRaf) return;
+    window.cancelAnimationFrame(state.hover.positionRaf);
+    state.hover.positionRaf = 0;
+  }
+
+  function positionHoverNow(mouseX, mouseY) {
     const { width: vw, height: vh } = getViewport();
     const pad = CONFIG.hover.viewportPadding;
     const offset = CONFIG.hover.offset;
@@ -1903,6 +1918,23 @@
 
       if (element.matches?.("a[href]")) {
         const href = element.getAttribute("href") || "";
+        const mediaViewerVideoUrl = pickWikimediaMediaViewerAssetUrl(
+          href,
+          "video",
+        );
+        if (mediaViewerVideoUrl) {
+          return {
+            element,
+            hoverTarget: element,
+            type: "video",
+            previewMode: "video",
+            url: mediaViewerVideoUrl,
+            currentTime: 0,
+            shouldPlay: false,
+            fallbackUrl: "",
+          };
+        }
+
         if (isLikelyVideoUrl(href)) {
           return {
             element,
@@ -1993,11 +2025,6 @@
         `#${IDS.overlay}, #${IDS.hoverWrap}, #${IDS.hoverToast}`,
       ),
     );
-  }
-
-  function isHoverWrapTarget(element) {
-    if (!(element instanceof Element)) return false;
-    return Boolean(element.closest?.(`#${IDS.hoverWrap}`));
   }
 
   function isTargetLargeEnough(element) {
