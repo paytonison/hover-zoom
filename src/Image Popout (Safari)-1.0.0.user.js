@@ -148,6 +148,9 @@
       suppressClick: false,
       suppressClickUntil: 0,
     },
+    viewport: {
+      changeRaf: 0,
+    },
     ui: {
       overlay: null,
       popoutWindow: null,
@@ -593,8 +596,8 @@
     window.addEventListener("keydown", onWindowKeyDown, true);
     window.addEventListener("pointermove", onWindowPointerMove, true);
     window.addEventListener("pointerup", onWindowPointerUp, true);
-    window.addEventListener("resize", onViewportChange, { passive: true });
-    window.addEventListener("scroll", onViewportChange, {
+    window.addEventListener("resize", scheduleViewportChange, { passive: true });
+    window.addEventListener("scroll", scheduleViewportChange, {
       capture: true,
       passive: true,
     });
@@ -783,8 +786,13 @@
       const nextTop = state.popout.drag.startTop + (
         event.clientY - state.popout.drag.startY
       );
-      setPopoutRect(nextLeft, nextTop);
-      clampPopoutToViewport();
+      const position = clampPopoutPosition(
+        nextLeft,
+        nextTop,
+        state.popout.drag.startWidth,
+        state.popout.drag.startHeight,
+      );
+      setPopoutRect(position.left, position.top);
       return;
     }
 
@@ -793,9 +801,6 @@
       event.pointerId === state.popout.resize.pointerId
     ) {
       event.preventDefault();
-      const rect = getPopoutRect();
-      if (!rect) return;
-
       const { width: vw, height: vh } = getViewport();
       const padding = CONFIG.viewportPadding;
       const maxWidth = Math.max(
@@ -822,7 +827,12 @@
         maxHeight,
       );
 
-      setPopoutRect(rect.left, rect.top, nextWidth, nextHeight);
+      setPopoutRect(
+        state.popout.resize.startLeft,
+        state.popout.resize.startTop,
+        nextWidth,
+        nextHeight,
+      );
     }
   }
 
@@ -877,6 +887,15 @@
 
   function onDocumentMouseLeave() {
     if (!state.hover.pinned) hideHover();
+  }
+
+  function scheduleViewportChange() {
+    if (state.viewport.changeRaf) return;
+
+    state.viewport.changeRaf = window.requestAnimationFrame(() => {
+      state.viewport.changeRaf = 0;
+      onViewportChange();
+    });
   }
 
   function handleAltClick(event) {
@@ -1110,9 +1129,7 @@
 
     video.onloadedmetadata = null;
     video.onerror = null;
-    video.pause();
-    video.removeAttribute("src");
-    video.load();
+    clearVideoSource(video);
   }
 
   function attachHoverLiveElement(candidate) {
@@ -1384,8 +1401,7 @@
       img.removeAttribute("src");
 
       video.style.display = "block";
-      video.pause();
-      video.removeAttribute("src");
+      clearVideoSource(video);
       video.src = mediaUrl;
 
       video.onloadedmetadata = () => {
@@ -1402,10 +1418,8 @@
       return;
     }
 
-    video.pause();
     video.style.display = "none";
-    video.removeAttribute("src");
-    video.load();
+    clearVideoSource(video);
 
     img.style.display = "block";
     img.onload = () => {
@@ -1425,6 +1439,17 @@
 
     img.removeAttribute("src");
     img.src = mediaUrl;
+  }
+
+  function clearVideoSource(video) {
+    if (!(video instanceof HTMLVideoElement)) return;
+
+    const hadSource = Boolean(video.getAttribute("src") || video.currentSrc);
+    video.pause();
+    if (!hadSource) return;
+
+    video.removeAttribute("src");
+    video.load();
   }
 
   function closePopout() {
@@ -1682,6 +1707,8 @@
       startY: event.clientY,
       startLeft: rect.left,
       startTop: rect.top,
+      startWidth: rect.width,
+      startHeight: rect.height,
     };
 
     capturePointer(event.currentTarget, event.pointerId);
@@ -1827,33 +1854,44 @@
     const padding = CONFIG.viewportPadding;
     const width = clamp(rect.width, 1, vw - (padding * 2));
     const height = clamp(rect.height, 1, vh - (padding * 2));
-    const left = clamp(
-      rect.left,
-      padding,
-      Math.max(padding, vw - width - padding),
-    );
-    const top = clamp(
-      rect.top,
-      padding,
-      Math.max(padding, vh - height - padding),
-    );
+    const position = clampPopoutPosition(rect.left, rect.top, width, height);
 
-    setPopoutRect(left, top, width, height);
+    setPopoutRect(position.left, position.top, width, height);
   }
 
-  function findImageCandidate(start, clientX, clientY) {
-    if (!(start instanceof Element)) return null;
-    if (isInsideUserscriptUi(start)) return null;
+  function clampPopoutPosition(left, top, width, height) {
+    const { width: vw, height: vh } = getViewport();
+    const padding = CONFIG.viewportPadding;
+    const clampedWidth = clamp(width, 1, vw - (padding * 2));
+    const clampedHeight = clamp(height, 1, vh - (padding * 2));
 
-    const image = start.closest("img");
-    if (image) {
-      return buildImageCandidate(image);
+    return {
+      left: clamp(
+        left,
+        padding,
+        Math.max(padding, vw - clampedWidth - padding),
+      ),
+      top: clamp(
+        top,
+        padding,
+        Math.max(padding, vh - clampedHeight - padding),
+      ),
+    };
+  }
+
+  function findImageCandidate(path, clientX, clientY) {
+    for (const element of path) {
+      if (element instanceof HTMLImageElement) {
+        const candidate = buildImageCandidate(element);
+        if (candidate) return candidate;
+      }
     }
 
-    for (let element = start; element; element = element.parentElement) {
+    for (const element of path) {
       const nestedImage = findNestedImageAtPoint(element, clientX, clientY);
       if (nestedImage) {
-        return buildImageCandidate(nestedImage);
+        const candidate = buildImageCandidate(nestedImage);
+        if (candidate) return candidate;
       }
 
       if (element.matches?.("a[href]")) {
@@ -1876,10 +1914,13 @@
   }
 
   function findHoverCandidate(start, clientX, clientY) {
-    const videoCandidate = findHoverVideoCandidate(start, clientX, clientY);
+    const path = getMediaPathAtPoint(start, clientX, clientY);
+    if (!path.length) return null;
+
+    const videoCandidate = findHoverVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(start, clientX, clientY);
+    const imageCandidate = findImageCandidate(path, clientX, clientY);
     if (imageCandidate) {
       return { ...imageCandidate, previewMode: "image" };
     }
@@ -1888,89 +1929,36 @@
   }
 
   function findPopoutCandidate(start, clientX, clientY) {
-    if (!(start instanceof Element)) return null;
-    if (isInsideUserscriptUi(start)) return null;
+    const path = getMediaPathAtPoint(start, clientX, clientY);
+    if (!path.length) return null;
 
-    const videoCandidate = findPopoutVideoCandidate(start, clientX, clientY);
+    const videoCandidate = findPopoutVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(start, clientX, clientY);
+    const imageCandidate = findImageCandidate(path, clientX, clientY);
     if (imageCandidate) {
       return { ...imageCandidate, type: "image" };
-    }
-
-    for (const element of getElementPathAtPoint(start, clientX, clientY)) {
-      if (element.matches?.("a[href]")) {
-        const href = element.getAttribute("href") || "";
-        const mediaViewerVideoUrl = pickWikimediaMediaViewerAssetUrl(
-          href,
-          "video",
-        );
-        if (mediaViewerVideoUrl) {
-          return { element, type: "video", url: mediaViewerVideoUrl };
-        }
-
-        if (isLikelyVideoUrl(href)) {
-          return { element, type: "video", url: resolveUrl(href) };
-        }
-      }
     }
 
     return null;
   }
 
-  function findHoverVideoCandidate(start, clientX, clientY) {
-    if (!(start instanceof Element)) return null;
-    if (isInsideUserscriptUi(start)) return null;
-
-    for (const element of getElementPathAtPoint(start, clientX, clientY)) {
+  function findHoverVideoCandidate(path) {
+    for (const element of path) {
       if (element instanceof HTMLVideoElement) {
         const candidate = buildHoverVideoCandidate(element);
         if (candidate) return candidate;
       }
 
-      if (element.matches?.("a[href]")) {
-        const href = element.getAttribute("href") || "";
-        const mediaViewerVideoUrl = pickWikimediaMediaViewerAssetUrl(
-          href,
-          "video",
-        );
-        if (mediaViewerVideoUrl) {
-          return {
-            element,
-            hoverTarget: element,
-            type: "video",
-            previewMode: "video",
-            url: mediaViewerVideoUrl,
-            currentTime: 0,
-            shouldPlay: false,
-            fallbackUrl: "",
-          };
-        }
-
-        if (isLikelyVideoUrl(href)) {
-          return {
-            element,
-            hoverTarget: element,
-            type: "video",
-            previewMode: "video",
-            url: resolveUrl(href),
-            currentTime: 0,
-            shouldPlay: false,
-            fallbackUrl: "",
-          };
-        }
-      }
+      const linkedCandidate = buildLinkedVideoCandidate(element, true);
+      if (linkedCandidate) return linkedCandidate;
     }
 
     return null;
   }
 
-  function findPopoutVideoCandidate(start, clientX, clientY) {
-    if (!(start instanceof Element)) return null;
-    if (isInsideUserscriptUi(start)) return null;
-
-    for (const element of getElementPathAtPoint(start, clientX, clientY)) {
+  function findPopoutVideoCandidate(path) {
+    for (const element of path) {
       if (element instanceof HTMLVideoElement) {
         const videoUrl = pickBestVideoUrl(element);
         if (videoUrl) {
@@ -1978,15 +1966,43 @@
         }
       }
 
-      if (element.matches?.("a[href]")) {
-        const href = element.getAttribute("href") || "";
-        if (isLikelyVideoUrl(href)) {
-          return { element, type: "video", url: resolveUrl(href) };
-        }
-      }
+      const linkedCandidate = buildLinkedVideoCandidate(element, false);
+      if (linkedCandidate) return linkedCandidate;
     }
 
     return null;
+  }
+
+  function getMediaPathAtPoint(start, clientX, clientY) {
+    if (!(start instanceof Element)) return [];
+    if (isInsideUserscriptUi(start)) return [];
+    return getElementPathAtPoint(start, clientX, clientY);
+  }
+
+  function buildLinkedVideoCandidate(element, forHover) {
+    if (!element.matches?.("a[href]")) return null;
+
+    const href = element.getAttribute("href") || "";
+    const videoUrl = (
+      pickWikimediaMediaViewerAssetUrl(href, "video") ||
+      (isLikelyVideoUrl(href) ? resolveUrl(href) : "")
+    );
+    if (!videoUrl) return null;
+
+    if (!forHover) {
+      return { element, type: "video", url: videoUrl };
+    }
+
+    return {
+      element,
+      hoverTarget: element,
+      type: "video",
+      previewMode: "video",
+      url: videoUrl,
+      currentTime: 0,
+      shouldPlay: false,
+      fallbackUrl: "",
+    };
   }
 
   function getElementsAtPoint(start, clientX, clientY) {
@@ -2091,29 +2107,16 @@
       };
     }
 
-    const liveElement = findLiveHoverVideoElement(video);
-    if (liveElement) {
-      return {
-        element: video,
-        hoverTarget: video,
-        type: "video",
-        previewMode: "live",
-        url: videoUrl,
-        currentTime,
-        shouldPlay,
-        fallbackUrl,
-        liveElement,
-      };
-    }
-
-    if (!fallbackUrl) return null;
-
     return {
       element: video,
       hoverTarget: video,
-      type: "image",
-      previewMode: "image",
-      url: fallbackUrl,
+      type: "video",
+      previewMode: "live",
+      url: videoUrl,
+      currentTime,
+      shouldPlay,
+      fallbackUrl,
+      liveElement: video,
     };
   }
 
@@ -2123,11 +2126,6 @@
       !url.startsWith("blob:") &&
       !url.startsWith("mediasource:"),
     );
-  }
-
-  function findLiveHoverVideoElement(video) {
-    if (!(video instanceof HTMLVideoElement)) return null;
-    return video;
   }
 
   function findNestedImageAtPoint(element, clientX, clientY) {
@@ -2165,33 +2163,32 @@
     const currentIsBlobLike =
       current.startsWith("blob:") || current.startsWith("data:");
 
-    const sourceCandidates = Array.from(video.querySelectorAll("source[src]"))
-      .map((source) => {
-        const rawUrl = source.getAttribute("src") || source.src || "";
-        const url = resolveUrl(rawUrl);
-        if (!url) return null;
+    let bestSourceUrl = "";
+    let bestSourceScore = -1;
 
-        const score = Math.max(
-          extractQualityScore(source.getAttribute("data-quality")),
-          extractQualityScore(source.getAttribute("label")),
-          extractQualityScore(source.getAttribute("res")),
-          extractQualityScore(source.getAttribute("size")),
-          extractQualityScore(source.getAttribute("title")),
-          extractQualityScore(url),
-        );
+    for (const source of video.querySelectorAll("source[src]")) {
+      const rawUrl = source.getAttribute("src") || source.src || "";
+      const url = resolveUrl(rawUrl);
+      if (!url) continue;
 
-        return { url, score };
-      })
-      .filter(Boolean);
+      const score = Math.max(
+        extractQualityScore(source.getAttribute("data-quality")),
+        extractQualityScore(source.getAttribute("label")),
+        extractQualityScore(source.getAttribute("res")),
+        extractQualityScore(source.getAttribute("size")),
+        extractQualityScore(source.getAttribute("title")),
+        extractQualityScore(url),
+      );
 
-    if (sourceCandidates.length) {
-      sourceCandidates.sort((a, b) => b.score - a.score);
-      const best = sourceCandidates[0];
-      if (best?.url) {
-        if (currentIsBlobLike) return best.url;
-        if (!current) return best.url;
-        if ((best.score || 0) > currentScore) return best.url;
-      }
+      if (score <= bestSourceScore) continue;
+      bestSourceUrl = url;
+      bestSourceScore = score;
+    }
+
+    if (bestSourceUrl) {
+      if (currentIsBlobLike) return bestSourceUrl;
+      if (!current) return bestSourceUrl;
+      if (bestSourceScore > currentScore) return bestSourceUrl;
     }
 
     return current;
@@ -2247,18 +2244,26 @@
     const entries = parseSrcset(srcset);
     if (entries.length === 0) return "";
 
-    const withWidth = entries.filter((entry) => typeof entry.width === "number");
-    if (withWidth.length) {
-      withWidth.sort((a, b) => (b.width || 0) - (a.width || 0));
-      return resolveUrl(withWidth[0].url);
+    let bestWidthEntry = null;
+    for (const entry of entries) {
+      if (typeof entry.width !== "number") continue;
+      if (!bestWidthEntry || entry.width > bestWidthEntry.width) {
+        bestWidthEntry = entry;
+      }
+    }
+    if (bestWidthEntry) {
+      return resolveUrl(bestWidthEntry.url);
     }
 
-    const withDensity = entries.filter(
-      (entry) => typeof entry.density === "number",
-    );
-    if (withDensity.length) {
-      withDensity.sort((a, b) => (b.density || 0) - (a.density || 0));
-      return resolveUrl(withDensity[0].url);
+    let bestDensityEntry = null;
+    for (const entry of entries) {
+      if (typeof entry.density !== "number") continue;
+      if (!bestDensityEntry || entry.density > bestDensityEntry.density) {
+        bestDensityEntry = entry;
+      }
+    }
+    if (bestDensityEntry) {
+      return resolveUrl(bestDensityEntry.url);
     }
 
     return resolveUrl(entries[0].url);
