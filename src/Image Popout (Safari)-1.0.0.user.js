@@ -48,6 +48,18 @@
     ".mw-mmv-image-inner-wrapper",
     ".mw-mmv-image",
   ].join(", ");
+  const INSTAGRAM_NESTED_IMAGE_CONTAINER_SELECTOR = [
+    "a",
+    "article",
+    "button",
+    "div",
+    "figure",
+    "li",
+    "picture",
+    "section",
+    "span",
+    "[role='button']",
+  ].join(", ");
   const LAZY_IMAGE_ATTRS = [
     "data-src",
     "data-original",
@@ -58,6 +70,21 @@
     "data-full",
     "data-large",
   ];
+  const WIKIMEDIA_PROJECT_HOST_RE = new RegExp(
+    `(^|\\.)(${[
+      "wikipedia",
+      "wikibooks",
+      "wikidata",
+      "wikimedia",
+      "wikinews",
+      "wikiquote",
+      "wikisource",
+      "wikiversity",
+      "wikivoyage",
+      "wiktionary",
+      "mediawiki",
+    ].join("|")})\\.org$`,
+  );
 
   const CONFIG = {
     minTargetPixels: 48,
@@ -110,6 +137,8 @@
     "webp",
   ]);
   const VIDEO_PREVIEW_CACHE = new WeakMap();
+  const DEBUG = false;
+  const CURRENT_SITE_ADAPTER = getCurrentSiteAdapter();
 
   const state = {
     hover: {
@@ -167,6 +196,7 @@
     },
   };
 
+  debug("site adapter", CURRENT_SITE_ADAPTER);
   init();
 
   function init() {
@@ -193,6 +223,39 @@
         JSON.stringify({ enabled: state.hover.enabled }),
       );
     } catch {}
+  }
+
+  function debug(message, details = undefined) {
+    if (!DEBUG) return;
+    if (details === undefined) {
+      console.debug("[Image Popout]", message);
+    } else {
+      console.debug("[Image Popout]", message, details);
+    }
+  }
+
+  function getCurrentSiteAdapter() {
+    const host = String(window.location.hostname || "").toLowerCase();
+
+    if (isInstagramHost(host)) {
+      return { name: "instagram", host, isInstagram: true, isWikimedia: false };
+    }
+
+    if (isWikimediaHost(host)) {
+      return { name: "wikimedia", host, isInstagram: false, isWikimedia: true };
+    }
+
+    return { name: "default", host, isInstagram: false, isWikimedia: false };
+  }
+
+  function isInstagramHost(host) {
+    const normalized = String(host || "").toLowerCase();
+    return /(^|\.)instagram\.com$/.test(normalized);
+  }
+
+  function isWikimediaHost(host) {
+    const normalized = String(host || "").toLowerCase();
+    return WIKIMEDIA_PROJECT_HOST_RE.test(normalized);
   }
 
   function injectStyles() {
@@ -1057,6 +1120,17 @@
 
     img.onerror = () => {
       if (token !== state.hover.loadToken) return;
+      debug("hover image load failure", {
+        url,
+        fallbackUrl: state.hover.fallbackUrl,
+      });
+      if (state.hover.fallbackUrl && state.hover.fallbackUrl !== url) {
+        debug("trying hover image fallback", {
+          fallbackUrl: state.hover.fallbackUrl,
+        });
+        setHoverImageUrl(state.hover.fallbackUrl);
+        return;
+      }
       hideHover();
     };
 
@@ -1112,6 +1186,10 @@
 
     video.onerror = () => {
       if (token !== state.hover.loadToken) return;
+      debug("hover video load failure", {
+        url: candidate.url,
+        fallbackUrl: candidate.fallbackUrl,
+      });
       if (candidate.fallbackUrl) {
         setHoverImageUrl(candidate.fallbackUrl);
       } else {
@@ -1359,13 +1437,29 @@
     state.ui.hoverWrap.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
   }
 
+  function getPreferredPopoutUrl(media) {
+    if (typeof media === "string") return media;
+    if (!media || typeof media !== "object") return "";
+
+    if (media.type === "video") {
+      return media.url || media.popoutUrl || media.originalUrl || "";
+    }
+
+    return media.popoutUrl || media.originalUrl || media.url || "";
+  }
+
+  function getPopoutFallbackUrl(media, preferredUrl) {
+    if (!media || typeof media !== "object") return "";
+
+    const fallbackUrl = media.fallbackUrl || (
+      media.url && media.url !== preferredUrl ? media.url : ""
+    );
+    return fallbackUrl && fallbackUrl !== preferredUrl ? fallbackUrl : "";
+  }
+
   function openPopout(media) {
-    const mediaUrl =
-      typeof media === "string"
-        ? media
-        : typeof media?.url === "string"
-          ? media.url
-          : "";
+    const mediaUrl = getPreferredPopoutUrl(media);
+    const fallbackUrl = getPopoutFallbackUrl(media, mediaUrl);
     const mediaType =
       typeof media === "object" && media?.type === "video" ? "video" : "image";
 
@@ -1411,6 +1505,7 @@
 
       video.onerror = () => {
         if (token !== state.popout.loadToken) return;
+        debug("popout video load failure", { url: mediaUrl, fallbackUrl });
         showPopoutToast("Failed to load video");
       };
 
@@ -1429,6 +1524,18 @@
 
     img.onerror = () => {
       if (token !== state.popout.loadToken) return;
+      debug("popout image load failure", {
+        url: state.popout.url,
+        fallbackUrl,
+      });
+      if (fallbackUrl && state.popout.url !== fallbackUrl) {
+        state.popout.url = fallbackUrl;
+        state.ui.popoutTitle.textContent = fallbackUrl;
+        debug("trying popout image fallback", { fallbackUrl });
+        img.removeAttribute("src");
+        img.src = fallbackUrl;
+        return;
+      }
       showPopoutToast("Failed to load image");
     };
 
@@ -1879,33 +1986,36 @@
     };
   }
 
-  function findImageCandidate(path, clientX, clientY) {
+  function findImageCandidate(path, clientX, clientY, options = {}) {
+    const intent = options.intent || "hover";
+    const site = options.site || CURRENT_SITE_ADAPTER;
+
     for (const element of path) {
       if (element instanceof HTMLImageElement) {
-        const candidate = buildImageCandidate(element);
+        const candidate = buildImageCandidate(element, { intent, site });
         if (candidate) return candidate;
       }
     }
 
     for (const element of path) {
-      const nestedImage = findNestedImageAtPoint(element, clientX, clientY);
+      const nestedImage = findNestedImageAtPoint(element, clientX, clientY, site);
       if (nestedImage) {
-        const candidate = buildImageCandidate(nestedImage);
+        const candidate = buildImageCandidate(nestedImage, { intent, site });
         if (candidate) return candidate;
       }
 
       if (element.matches?.("a[href]")) {
         const href = element.getAttribute("href") || "";
-        const linkedImageUrl = pickLinkedImageUrl(href);
+        const linkedImageUrl = pickLinkedImageUrl(href, "", { intent, site });
         if (linkedImageUrl) {
-          return { element, url: linkedImageUrl };
+          return { element, url: linkedImageUrl, fallbackUrl: "" };
         }
       }
 
       if (element.matches?.(BACKGROUND_IMAGE_SELECTOR)) {
-        const backgroundUrl = getBackgroundImageUrl(element);
+        const backgroundUrl = getBackgroundImageUrl(element, { intent, site });
         if (backgroundUrl) {
-          return { element, url: backgroundUrl };
+          return { element, url: backgroundUrl, fallbackUrl: backgroundUrl };
         }
       }
     }
@@ -1920,7 +2030,10 @@
     const videoCandidate = findHoverVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(path, clientX, clientY);
+    const imageCandidate = findImageCandidate(path, clientX, clientY, {
+      intent: "hover",
+      site: CURRENT_SITE_ADAPTER,
+    });
     if (imageCandidate) {
       return { ...imageCandidate, previewMode: "image" };
     }
@@ -1935,7 +2048,10 @@
     const videoCandidate = findPopoutVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(path, clientX, clientY);
+    const imageCandidate = findImageCandidate(path, clientX, clientY, {
+      intent: "popout",
+      site: CURRENT_SITE_ADAPTER,
+    });
     if (imageCandidate) {
       return { ...imageCandidate, type: "image" };
     }
@@ -1946,7 +2062,9 @@
   function findHoverVideoCandidate(path) {
     for (const element of path) {
       if (element instanceof HTMLVideoElement) {
-        const candidate = buildHoverVideoCandidate(element);
+        const candidate = buildHoverVideoCandidate(element, {
+          site: CURRENT_SITE_ADAPTER,
+        });
         if (candidate) return candidate;
       }
 
@@ -2071,30 +2189,58 @@
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
   }
 
-  function buildImageCandidate(image) {
+  function buildImageCandidate(image, options = {}) {
     if (!(image instanceof HTMLImageElement)) return null;
 
-    const imageUrl = pickBestImageUrl(image);
+    const intent = options.intent || "hover";
+    const site = options.site || CURRENT_SITE_ADAPTER;
+    const hoverUrl = pickBestImageUrl(image, { intent: "hover", site });
+    const originalUrl = pickBestImageUrl(image, { intent: "popout", site });
     const linkedUrl = image.closest("a[href]")?.getAttribute("href") || "";
-    const linkedImageUrl = pickLinkedImageUrl(linkedUrl, imageUrl);
-    if (linkedImageUrl) {
-      return { element: image, url: linkedImageUrl };
-    }
+    const linkedImageUrl = pickLinkedImageUrl(linkedUrl, hoverUrl, {
+      intent: "popout",
+      site,
+    });
+    const popoutUrl = linkedImageUrl || originalUrl || hoverUrl;
+    const selectedUrl = intent === "popout" ? popoutUrl || hoverUrl : hoverUrl;
 
-    if (!imageUrl) return null;
+    if (!selectedUrl) return null;
 
-    return { element: image, url: imageUrl };
+    const candidate = {
+      element: image,
+      url: selectedUrl,
+      popoutUrl: popoutUrl && popoutUrl !== hoverUrl ? popoutUrl : "",
+      originalUrl: originalUrl && originalUrl !== hoverUrl ? originalUrl : "",
+      fallbackUrl: hoverUrl || "",
+    };
+
+    debug("selected image candidate", {
+      intent,
+      site: site.name,
+      url: candidate.url,
+      popoutUrl: candidate.popoutUrl,
+      originalUrl: candidate.originalUrl,
+      fallbackUrl: candidate.fallbackUrl,
+    });
+
+    return candidate;
   }
 
-  function buildHoverVideoCandidate(video) {
+  function buildHoverVideoCandidate(video, options = {}) {
     if (!(video instanceof HTMLVideoElement)) return null;
 
+    const site = options.site || CURRENT_SITE_ADAPTER;
     const videoUrl = pickBestVideoUrl(video);
     const fallbackUrl = pickVideoPreviewUrl(video);
     const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
     const shouldPlay = !video.paused && !video.ended;
 
     if (isReplayableHoverVideoUrl(videoUrl)) {
+      debug("selected hover video candidate", {
+        site: site.name,
+        url: videoUrl,
+        fallbackUrl,
+      });
       return {
         element: video,
         hoverTarget: video,
@@ -2107,6 +2253,31 @@
       };
     }
 
+    if (site.isInstagram) {
+      if (!fallbackUrl) {
+        debug("skipping Instagram video without safe preview", { videoUrl });
+        return null;
+      }
+
+      debug("using Instagram video image fallback", {
+        videoUrl,
+        fallbackUrl,
+      });
+      return {
+        element: video,
+        hoverTarget: video,
+        type: "image",
+        previewMode: "image",
+        url: fallbackUrl,
+        fallbackUrl,
+      };
+    }
+
+    debug("selected live video candidate", {
+      site: site.name,
+      url: videoUrl,
+      fallbackUrl,
+    });
     return {
       element: video,
       hoverTarget: video,
@@ -2128,31 +2299,92 @@
     );
   }
 
-  function findNestedImageAtPoint(element, clientX, clientY) {
+  function findNestedImageAtPoint(element, clientX, clientY, site = CURRENT_SITE_ADAPTER) {
     if (!(element instanceof Element)) return null;
     if (typeof clientX !== "number" || typeof clientY !== "number") return null;
-    if (!element.matches?.(NESTED_IMAGE_CONTAINER_SELECTOR)) return null;
+    const selector = (
+      site.isInstagram
+        ? INSTAGRAM_NESTED_IMAGE_CONTAINER_SELECTOR
+        : NESTED_IMAGE_CONTAINER_SELECTOR
+    );
+    if (!element.matches?.(selector)) return null;
 
     for (const image of element.querySelectorAll("img")) {
-      if (pointWithinElement(image, clientX, clientY)) return image;
+      if (
+        pointWithinElement(image, clientX, clientY) &&
+        isRenderableElement(image)
+      ) {
+        return image;
+      }
     }
 
     return null;
   }
 
-  function pickBestImageUrl(image) {
-    const srcsetUrl = pickBestSrcsetUrl(image.getAttribute("srcset") || image.srcset || "");
-    if (srcsetUrl) return srcsetUrl;
+  function isRenderableElement(element) {
+    const rect = element.getBoundingClientRect?.();
+    if (!rect || rect.width <= 0 || rect.height <= 0) return false;
 
-    const currentSrc = resolveUrl(image.currentSrc || "");
-    if (currentSrc) return currentSrc;
+    try {
+      const style = getComputedStyle(element);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0"
+      );
+    } catch {
+      return true;
+    }
+  }
 
-    for (const attr of LAZY_IMAGE_ATTRS) {
-      const value = image.getAttribute(attr);
-      if (value) return resolveUrl(value);
+  function pickBestImageUrl(image, options = {}) {
+    const intent = options.intent || "hover";
+    const site = options.site || CURRENT_SITE_ADAPTER;
+    const candidates = [];
+
+    const addCandidate = (source, rawUrl) => {
+      const url = resolveUrl(rawUrl || "", { intent, site });
+      if (!url) return;
+      candidates.push({ source, url });
+    };
+
+    const addSrcsetCandidate = () => {
+      const srcsetUrl = pickBestSrcsetUrl(
+        image.getAttribute("srcset") || image.srcset || "",
+        { intent, site },
+      );
+      if (srcsetUrl) candidates.push({ source: "srcset", url: srcsetUrl });
+    };
+
+    if (site.isInstagram) {
+      addCandidate("currentSrc", image.currentSrc || "");
+      addSrcsetCandidate();
+      addCandidate("src", image.getAttribute("src") || image.src || "");
+    } else if (intent === "hover") {
+      addCandidate("currentSrc", image.currentSrc || "");
+      addSrcsetCandidate();
+      addCandidate("src", image.getAttribute("src") || image.src || "");
+      for (const attr of LAZY_IMAGE_ATTRS) {
+        addCandidate(attr, image.getAttribute(attr));
+      }
+    } else {
+      addSrcsetCandidate();
+      addCandidate("currentSrc", image.currentSrc || "");
+      for (const attr of LAZY_IMAGE_ATTRS) {
+        addCandidate(attr, image.getAttribute(attr));
+      }
+      addCandidate("src", image.getAttribute("src") || image.src || "");
     }
 
-    return resolveUrl(image.src || "");
+    const selected = candidates[0] || null;
+    debug("selected image URL", {
+      intent,
+      site: site.name,
+      source: selected?.source || "",
+      url: selected?.url || "",
+    });
+
+    return selected?.url || "";
   }
 
   function pickBestVideoUrl(video) {
@@ -2161,7 +2393,9 @@
     const current = resolveUrl(video.currentSrc || video.src || "");
     const currentScore = extractQualityScore(current);
     const currentIsBlobLike =
-      current.startsWith("blob:") || current.startsWith("data:");
+      current.startsWith("blob:") ||
+      current.startsWith("data:") ||
+      current.startsWith("mediasource:");
 
     let bestSourceUrl = "";
     let bestSourceScore = -1;
@@ -2240,7 +2474,9 @@
     return match ? Number(match[1]) || 0 : 0;
   }
 
-  function pickBestSrcsetUrl(srcset) {
+  function pickBestSrcsetUrl(srcset, options = {}) {
+    const intent = options.intent || "hover";
+    const site = options.site || CURRENT_SITE_ADAPTER;
     const entries = parseSrcset(srcset);
     if (entries.length === 0) return "";
 
@@ -2252,7 +2488,7 @@
       }
     }
     if (bestWidthEntry) {
-      return resolveUrl(bestWidthEntry.url);
+      return resolveUrl(bestWidthEntry.url, { intent, site });
     }
 
     let bestDensityEntry = null;
@@ -2263,10 +2499,10 @@
       }
     }
     if (bestDensityEntry) {
-      return resolveUrl(bestDensityEntry.url);
+      return resolveUrl(bestDensityEntry.url, { intent, site });
     }
 
-    return resolveUrl(entries[0].url);
+    return resolveUrl(entries[0].url, { intent, site });
   }
 
   function parseSrcset(srcset) {
@@ -2290,33 +2526,47 @@
       .filter((entry) => entry.url);
   }
 
-  function getBackgroundImageUrl(element) {
+  function getBackgroundImageUrl(element, options = {}) {
+    const intent = options.intent || "hover";
+    const site = options.site || CURRENT_SITE_ADAPTER;
+
     try {
       const backgroundImage = getComputedStyle(element).backgroundImage;
       if (!backgroundImage || backgroundImage === "none") return "";
 
       const match = backgroundImage.match(/url\(["']?(.*?)["']?\)/i);
-      return resolveUrl(match?.[1] || "");
+      return resolveUrl(match?.[1] || "", { intent, site });
     } catch {
       return "";
     }
   }
 
-  function pickLinkedImageUrl(url, fallbackUrl = "") {
+  function pickLinkedImageUrl(url, fallbackUrl = "", options = {}) {
     if (!url) return "";
 
+    const intent = options.intent || "hover";
+    const site = options.site || CURRENT_SITE_ADAPTER;
     const mediaViewerUrl = pickWikimediaMediaViewerAssetUrl(url, "image");
     if (mediaViewerUrl) {
-      return fallbackUrl || mediaViewerUrl;
+      return intent === "hover" && fallbackUrl ? fallbackUrl : mediaViewerUrl;
+    }
+
+    const wikimediaFileRedirectUrl = pickWikimediaFilePageRedirectUrl(url, "image");
+    if (wikimediaFileRedirectUrl) {
+      return (
+        intent === "hover" && fallbackUrl
+          ? fallbackUrl
+          : wikimediaFileRedirectUrl
+      );
     }
 
     if (!isLikelyImageUrl(url)) return "";
 
-    const resolvedUrl = resolveUrl(url);
+    const resolvedUrl = resolveUrl(url, { intent, site });
     if (!resolvedUrl) return "";
 
     if (isWikimediaFilePageUrl(resolvedUrl)) {
-      return fallbackUrl || "";
+      return intent === "hover" ? fallbackUrl || "" : "";
     }
 
     return resolvedUrl;
@@ -2337,21 +2587,46 @@
   }
 
   function isWikimediaFilePageUrl(url) {
-    if (!url) return false;
+    return Boolean(extractWikimediaFilePageName(url));
+  }
+
+  function pickWikimediaFilePageRedirectUrl(url, mediaType) {
+    const fileName = extractWikimediaFilePageName(url);
+    if (!fileName) return "";
+
+    if (mediaType === "image" && isLikelyVideoUrl(fileName)) return "";
+    if (mediaType === "video" && !isLikelyVideoUrl(fileName)) return "";
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      return `${parsed.origin}/wiki/Special:Redirect/file/${encodeURIComponent(fileName)}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function extractWikimediaFilePageName(url) {
+    if (!url) return "";
 
     try {
       const parsed = new URL(url, window.location.href);
       const host = parsed.hostname.toLowerCase();
-      if (!isWikimediaProjectHost(host)) return false;
+      if (!isWikimediaProjectHost(host)) return "";
 
       const title = parsed.searchParams.get("title") || "";
-      if (/^(File|Media):/i.test(title)) return true;
+      if (/^(File|Media):/i.test(title)) {
+        return sanitizeWikimediaFileName(title.replace(/^(File|Media):/i, ""));
+      }
 
-      if (!parsed.pathname.startsWith("/wiki/")) return false;
+      if (!parsed.pathname.startsWith("/wiki/")) return "";
       const pageTitle = parsed.pathname.slice("/wiki/".length);
-      return /^(File|Media):/i.test(pageTitle);
+      if (!/^(File|Media):/i.test(pageTitle)) return "";
+
+      return sanitizeWikimediaFileName(
+        pageTitle.replace(/^(File|Media):/i, ""),
+      );
     } catch {
-      return false;
+      return "";
     }
   }
 
@@ -2416,9 +2691,7 @@
   }
 
   function isWikimediaProjectHost(host) {
-    return /(\.|^)(wikipedia|wikibooks|wikidata|wikimedia|wikinews|wikiquote|wikisource|wikiversity|wikivoyage|wiktionary|mediawiki)\.org$/.test(
-      host,
-    );
+    return isWikimediaHost(host);
   }
 
   function isLikelyVideoUrl(url) {
@@ -2433,29 +2706,46 @@
     }
   }
 
-  function resolveUrl(url) {
+  function resolveUrl(url, options = {}) {
     if (!url) return "";
     if (url.startsWith("data:image/") || url.startsWith("data:video/")) return url;
 
+    const intent = options.intent || "hover";
+    const site = options.site || CURRENT_SITE_ADAPTER;
+
     try {
-      return normalizeKnownImageUrl(new URL(url, window.location.href).href);
+      return normalizeKnownImageUrl(new URL(url, window.location.href).href, {
+        intent,
+        site,
+      });
     } catch {
-      return normalizeKnownImageUrl(url);
+      return normalizeKnownImageUrl(url, { intent, site });
     }
   }
 
-  function normalizeKnownImageUrl(url) {
+  function normalizeKnownImageUrl(url, options = {}) {
     if (!url || url.startsWith("data:image/") || url.startsWith("data:video/")) {
       return url;
     }
+
+    const intent = options.intent || "hover";
 
     try {
       const parsed = new URL(url, window.location.href);
       const host = parsed.hostname.toLowerCase();
 
-      if (host === "upload.wikimedia.org" && parsed.pathname.includes("/thumb/")) {
+      if (
+        intent !== "hover" &&
+        host === "upload.wikimedia.org" &&
+        parsed.pathname.includes("/thumb/")
+      ) {
         const originalPath = getWikimediaOriginalPath(parsed.pathname);
         if (originalPath) {
+          debug("rewriting Wikimedia thumbnail for non-hover intent", {
+            intent,
+            from: parsed.href,
+            toPath: originalPath,
+          });
           parsed.pathname = originalPath;
           parsed.search = "";
           parsed.hash = "";
