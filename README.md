@@ -1,78 +1,144 @@
 # hover-zoom
 
-`hover-zoom` is a Safari userscript that shows a near-cursor preview for images
-and opens a movable popout window for images or videos with Alt/Option-click.
+`hover-zoom` contains a single Safari/Tampermonkey userscript, `Image Popout
+(Safari)`, for inspecting media on web pages without leaving the page. It shows
+near-cursor previews for supported images and videos, and it can open supported
+media in a draggable, resizable in-page popout.
 
-## Current repo contents
+## Repository contents
 
-- `src/Image Popout (Safari)-1.0.0.user.js`: the only source file and the userscript
-  you install.
-- `README.md`: installation, controls, and development notes.
+- `src/Image Popout (Safari)-1.0.0.user.js`: the userscript to install.
+- `README.md`: this usage and development guide.
 
-## What the script does
+There is no build step, package manifest, lint command, or automated test suite.
 
-- Previews large enough images near the cursor while you hover.
-- Pins or unpins video previews on click, or any current preview with `P`.
-- Toggles hover previews with `Z` and stores that preference in
-  `localStorage` under `image_popout_safari_v2`.
-- Closes the preview and any open popout with `Esc`.
-- Opens a draggable, resizable overlay with Alt/Option-click.
-- Supports both image and video popouts.
-- Includes `Copy URL`, `Open`, `Download`, and `Close` controls in the popout.
-- Lets you press `D` to download the currently open popout media.
-- Looks for the best available asset from `srcset`, lazy-load attributes, linked
-  originals, CSS background images, and `<video>/<source>` elements.
-- Normalizes a few common media URL patterns, including Wikimedia thumbnail URLs
-  and original-size `twimg.com` image URLs.
+## What the userscript does
+
+- Runs on top-level `http` and `https` pages.
+- Shows a hover preview for supported images and videos when the target is at
+  least 48 by 48 CSS pixels.
+- Keeps hover previews inside the viewport and scales them down when needed.
+- Lets `Z` turn hover previews on or off, saved per site in `localStorage` under
+  `image_popout_safari_v2`.
+- Lets `P` pin or unpin the current hover preview.
+- Lets a plain click pin or unpin video previews.
+- Opens a modal popout with Alt/Option-click on supported image or video media.
+- Auto-fits the popout to the media, then allows manual dragging and resizing.
+- Provides popout controls for `Copy URL`, `Open`, `Download`, and `Close`.
+- Lets `D` download the media currently open in the popout.
+- Closes the hover preview and popout with `Esc`; clicking the popout backdrop
+  also closes the popout.
+
+## Supported media
+
+The script is intentionally generic rather than site-specific. It searches the
+element under the pointer and nearby elements at the same screen coordinates for:
+
+- `<img>` elements, preferring the largest `srcset` candidate when one exists.
+- `currentSrc`, `src`, and common lazy-load attributes: `data-src`,
+  `data-original`, `data-url`, `data-lazy-src`, `data-zoom-src`, `data-hires`,
+  `data-full`, and `data-large`.
+- Direct image links around an image or under the pointer.
+- CSS `background-image` URLs on common container elements.
+- `<video>` elements, including `currentSrc`, `src`, and nested `<source>` URLs.
+- Direct video links for popouts and hover previews.
+- Wikimedia media-viewer file hashes and Wikimedia thumbnail URLs, including
+  thumbnail URLs rewritten back to the original upload path when possible.
+- `twimg.com` image URLs, with `name=orig` requested when the URL uses Twitter's
+  `format` or `name` query parameters.
+
+For hover video previews, direct video URLs are replayed in the preview. Blob or
+MediaSource-backed videos are moved into the preview temporarily when possible,
+with poster/frame fallbacks used when direct replay is not available.
 
 ## Installation
 
 1. Install a Safari-compatible userscript manager.
-2. Use a manager with `GM_download` and `GM_xmlhttpRequest` support if you want
-   the built-in download button to work reliably. `Tampermonkey` is the safest
-   fit for the current script.
-3. Create a new userscript from `src/image-popout.user.patched.js`.
-4. Enable it and refresh the page you want to test.
+2. Prefer a manager with `GM_download` and `GM_xmlhttpRequest` support if you
+   want the built-in download control to work reliably.
+3. Create a new userscript from
+   `src/Image Popout (Safari)-1.0.0.user.js`.
+4. Enable it and refresh any pages you want to test.
 
-The script currently matches all `http` and `https` pages:
+The userscript metadata currently matches every `http` and `https` page:
 
 ```js
 // @match        http://*/*
 // @match        https://*/*
 ```
 
+It also declares:
+
+```js
+// @grant        GM_download
+// @grant        GM_xmlhttpRequest
+// @connect      *
+```
+
+Those grants are used only for the download flow.
+
 ## Controls
 
 | Action | Result |
 | --- | --- |
-| Hover a supported image target | Show the near-cursor preview |
-| Click the hovered video target | Pin or unpin the preview |
-| `P` | Pin or unpin the preview |
-| `Z` | Turn hover previews on or off |
+| Hover a supported media target | Show a near-cursor preview |
+| Plain-click a video preview target | Pin or unpin the video preview |
+| `P` while a preview is visible | Pin or unpin the current preview |
+| `Z` | Toggle hover previews on or off |
 | `Esc` | Hide the preview and close the popout |
-| Alt/Option-click a supported target | Open the popout overlay |
-| `D` while the popout is open | Download the current popout media |
+| Alt/Option-click supported media | Open the media in the popout |
+| Drag the popout title bar | Move the popout |
+| Drag the bottom-right handle | Resize the popout |
+| `Copy URL` | Copy the popout media URL, with a prompt fallback |
+| `Open` | Open the popout media URL in a new tab |
+| `Download` or `D` | Download the current popout media |
+| `Close`, backdrop click, or `Esc` | Close the popout |
 
-## Supported targets
+## Download behavior
 
-- `<img>` elements, including higher-quality `srcset` variants.
-- Linked images when the surrounding `<a>` points at a direct media asset.
-- Elements with CSS `background-image`.
-- `<video>` elements and linked video files for the popout flow.
-- Some Wikimedia media-viewer and thumbnail URLs, which are normalized back to
-  direct asset URLs when possible.
+Downloads first try the userscript manager's `GM_download` API. If that is not
+available or fails, the script tries `GM_xmlhttpRequest` to fetch the media as a
+blob and then saves it through a temporary download link.
+
+Generated filenames use this pattern:
+
+```text
+hz_<site-host>_<yyyy-mm-dd>_<hh-mm-ss>.<extension>
+```
+
+The extension is inferred from the response `Content-Type`, the URL path, or
+common query parameters when possible. Otherwise, `.bin` is used.
+
+## Known limits
+
+- The script exits inside iframes and only runs in the top window.
+- Download reliability depends on the userscript manager, direct media access,
+  and the site's response headers.
+- Some dynamic video players expose only blob or MediaSource URLs. Hover preview
+  may still work by temporarily moving the live video element, but popout and
+  download need a direct media URL.
+- Wikimedia file-page links are not fetched or scraped; the script uses the
+  visible image, direct media URLs, or media-viewer redirect URLs it can derive
+  locally.
 
 ## Development and testing
 
-No build, lint, or automated test tooling is configured in this repo.
+Edit `src/Image Popout (Safari)-1.0.0.user.js` directly, reload the userscript in
+Safari, and manually verify behavior on real pages. Useful checks include hover
+previews, video pinning, Alt/Option-click popouts, dragging, resizing,
+copy/open/download controls, keyboard shortcuts, and normal page click/scroll
+behavior.
 
-- Edit `src/image-popout.user.patched.js`.
-- Reload the userscript in Safari.
-- Manually verify hover previews, pinning, popout behavior, dragging, resizing,
-  copy/open/download actions, and normal page interaction on real sites.
+For a quick syntax check, run:
+
+```sh
+node --check 'src/Image Popout (Safari)-1.0.0.user.js'
+```
 
 ## Security and privacy
 
-- The script runs in-page and does not send browsing data to a server.
-- The download flow depends on userscript-manager APIs and direct media access.
+- The script does not send browsing data to a separate service.
+- It does not fetch or execute remote code.
+- It reads media URLs from the current page and may request those URLs only when
+  loading previews, opening popouts, or downloading media.
 - Treat page content as untrusted input when extending the script.
