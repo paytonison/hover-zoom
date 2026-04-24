@@ -5,7 +5,7 @@ and opens a movable popout window for images or videos with Alt/Option-click.
 
 ## Current repo contents
 
-- `src/Image Popout (Safari)-1.0.0.user.js`: the only source file and the userscript
+- `src/Image Popout (Safari)-1.5.user.js`: the only source file and the userscript
   you install.
 - `README.md`: installation, controls, and development notes.
 
@@ -31,7 +31,7 @@ and opens a movable popout window for images or videos with Alt/Option-click.
 2. Use a manager with `GM_download` and `GM_xmlhttpRequest` support if you want
    the built-in download button to work reliably. `Tampermonkey` is the safest
    fit for the current script.
-3. Create a new userscript from `src/image-popout.user.patched.js`.
+3. Create a new userscript from `src/Image Popout (Safari)-1.5.user.js`.
 4. Enable it and refresh the page you want to test.
 
 The script currently matches all `http` and `https` pages:
@@ -66,7 +66,7 @@ The script currently matches all `http` and `https` pages:
 
 No build, lint, or automated test tooling is configured in this repo.
 
-- Edit `src/image-popout.user.patched.js`.
+- Edit `src/Image Popout (Safari)-1.5.user.js`.
 - Reload the userscript in Safari.
 - Manually verify hover previews, pinning, popout behavior, dragging, resizing,
   copy/open/download actions, and normal page interaction on real sites.
