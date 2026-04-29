@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      1.5.1
+// @version      1.5.2
 // @description  Hover images or videos for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -133,6 +133,7 @@
       videoShouldPlay: false,
       live: null,
       toastTimer: 0,
+      targetRect: null,
     },
     popout: {
       open: false,
@@ -142,6 +143,7 @@
       loadToken: 0,
       drag: null,
       resize: null,
+      pointerListenersActive: false,
       toastTimer: 0,
     },
     input: {
@@ -164,15 +166,21 @@
       hoverLiveHost: null,
       hoverBadge: null,
       hoverToast: null,
+      ready: false,
     },
   };
 
   init();
 
   function init() {
+    bindEvents();
+  }
+
+  function ensureUi() {
+    if (state.ui.ready) return;
     injectStyles();
     buildUi();
-    bindEvents();
+    state.ui.ready = true;
   }
 
   function loadPrefs() {
@@ -594,8 +602,6 @@
     document.addEventListener("click", onDocumentClick, true);
     document.addEventListener("contextmenu", onDocumentContextMenu, true);
     window.addEventListener("keydown", onWindowKeyDown, true);
-    window.addEventListener("pointermove", onWindowPointerMove, true);
-    window.addEventListener("pointerup", onWindowPointerUp, true);
     window.addEventListener("resize", scheduleViewportChange, { passive: true });
     window.addEventListener("scroll", scheduleViewportChange, {
       capture: true,
@@ -694,11 +700,7 @@
         activateHover(candidate, event.clientX, event.clientY);
       } else if (
         state.hover.target &&
-        !pointWithinElement(
-          state.hover.target,
-          event.clientX,
-          event.clientY,
-        )
+        !pointWithinHoverTarget(event.clientX, event.clientY)
       ) {
         hideHover();
         return;
@@ -708,7 +710,7 @@
     if (!state.hover.target) return;
 
     if (
-      !pointWithinElement(state.hover.target, event.clientX, event.clientY)
+      !pointWithinHoverTarget(event.clientX, event.clientY)
     ) {
       const candidate = findHoverCandidate(
         document.elementFromPoint(event.clientX, event.clientY),
@@ -853,6 +855,10 @@
       state.popout.resize = null;
       document.documentElement.style.userSelect = "";
     }
+
+    if (!state.popout.drag && !state.popout.resize) {
+      removeActivePointerListeners();
+    }
   }
 
   function onViewportChange() {
@@ -866,9 +872,10 @@
     applyHoverSize();
     if (state.hover.pinned) return;
 
+    state.hover.targetRect = getElementRectSnapshot(state.hover.target);
     if (
       state.hover.target &&
-      pointWithinElement(state.hover.target, state.hover.mouseX, state.hover.mouseY)
+      pointWithinHoverTarget(state.hover.mouseX, state.hover.mouseY)
     ) {
       updateHoverPosition(state.hover.mouseX, state.hover.mouseY);
     } else {
@@ -882,6 +889,7 @@
   }
 
   function onWindowBlur() {
+    stopPopoutPointerInteraction();
     if (!state.hover.pinned) hideHover();
   }
 
@@ -890,6 +898,7 @@
   }
 
   function scheduleViewportChange() {
+    state.hover.targetRect = null;
     if (state.viewport.changeRaf) return;
 
     state.viewport.changeRaf = window.requestAnimationFrame(() => {
@@ -924,7 +933,7 @@
     if (
       !state.hover.pinned &&
       state.hover.target &&
-      !pointWithinElement(state.hover.target, state.hover.mouseX, state.hover.mouseY)
+      !pointWithinHoverTarget(state.hover.mouseX, state.hover.mouseY)
     ) {
       hideHover();
     }
@@ -933,6 +942,8 @@
   }
 
   function activateHover(candidate, mouseX, mouseY) {
+    ensureUi();
+
     const previewMode = candidate.previewMode || "image";
 
     state.hover.url = candidate.url || "";
@@ -952,12 +963,12 @@
     updateHoverInteractivity();
 
     if (previewMode === "live") {
-      state.hover.target = attachHoverLiveElement(candidate);
+      setHoverTarget(attachHoverLiveElement(candidate));
     } else if (previewMode === "video") {
-      state.hover.target = candidate.hoverTarget || candidate.element;
+      setHoverTarget(candidate.hoverTarget || candidate.element);
       setHoverVideoCandidate(candidate);
     } else {
-      state.hover.target = candidate.hoverTarget || candidate.element;
+      setHoverTarget(candidate.hoverTarget || candidate.element);
       if (
         state.ui.hoverImg.src !== candidate.url ||
         !state.hover.naturalW ||
@@ -977,10 +988,25 @@
 
   function hideHover() {
     cancelHoverPositionFrame();
+    if (!state.ui.ready) {
+      state.hover.target = null;
+      state.hover.targetRect = null;
+      state.hover.url = "";
+      state.hover.previewMode = "image";
+      state.hover.fallbackUrl = "";
+      state.hover.videoCurrentTime = 0;
+      state.hover.videoShouldPlay = false;
+      state.hover.naturalW = 0;
+      state.hover.naturalH = 0;
+      state.hover.lastEventTarget = null;
+      return;
+    }
+
     teardownHoverLiveElement();
     clearHoverVideo();
     showHoverPreviewMode("image");
     state.hover.target = null;
+    state.hover.targetRect = null;
     state.hover.url = "";
     state.hover.previewMode = "image";
     state.hover.fallbackUrl = "";
@@ -996,7 +1022,7 @@
   }
 
   function isHoverVisible() {
-    return state.ui.hoverWrap.style.display === "block";
+    return state.ui.ready && state.ui.hoverWrap.style.display === "block";
   }
 
   function setHoverImageUrl(url) {
@@ -1335,6 +1361,7 @@
       typeof media === "object" && media?.type === "video" ? "video" : "image";
 
     if (!mediaUrl) return;
+    ensureUi();
 
     state.popout.open = true;
     state.popout.url = mediaUrl;
@@ -1420,8 +1447,7 @@
   function closePopout() {
     if (!state.popout.open) return;
     state.popout.open = false;
-    state.popout.drag = null;
-    state.popout.resize = null;
+    stopPopoutPointerInteraction();
     state.ui.popoutVideo.pause();
     state.ui.overlay.classList.remove("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
@@ -1620,6 +1646,7 @@
   }
 
   function showHoverToast(message) {
+    ensureUi();
     showToast(
       state.ui.hoverToast,
       "hover",
@@ -1629,6 +1656,7 @@
   }
 
   function showPopoutToast(message) {
+    ensureUi();
     showToast(
       state.ui.popoutToast,
       "popout",
@@ -1676,6 +1704,7 @@
       startHeight: rect.height,
     };
 
+    addActivePointerListeners();
     capturePointer(event.currentTarget, event.pointerId);
   }
 
@@ -1702,7 +1731,45 @@
       startTop: rect.top,
     };
 
+    addActivePointerListeners();
     capturePointer(event.currentTarget, event.pointerId);
+  }
+
+  function addActivePointerListeners() {
+    if (state.popout.pointerListenersActive) return;
+
+    state.popout.pointerListenersActive = true;
+    window.addEventListener("pointermove", onWindowPointerMove, true);
+    window.addEventListener("pointerup", onWindowPointerUp, true);
+  }
+
+  function removeActivePointerListeners() {
+    if (!state.popout.pointerListenersActive) return;
+
+    state.popout.pointerListenersActive = false;
+    window.removeEventListener("pointermove", onWindowPointerMove, true);
+    window.removeEventListener("pointerup", onWindowPointerUp, true);
+  }
+
+  function stopPopoutPointerInteraction() {
+    if (state.popout.drag) {
+      releasePointerCapture(
+        state.popout.drag.handle,
+        state.popout.drag.pointerId,
+      );
+      state.popout.drag = null;
+    }
+
+    if (state.popout.resize) {
+      releasePointerCapture(
+        state.popout.resize.handle,
+        state.popout.resize.pointerId,
+      );
+      state.popout.resize = null;
+    }
+
+    document.documentElement.style.userSelect = "";
+    removeActivePointerListeners();
   }
 
   function capturePointer(handle, pointerId) {
@@ -2028,6 +2095,47 @@
       rect.width >= CONFIG.minTargetPixels &&
       rect.height >= CONFIG.minTargetPixels
     );
+  }
+
+  function setHoverTarget(element) {
+    state.hover.target = element;
+    state.hover.targetRect = getElementRectSnapshot(element);
+  }
+
+  function pointWithinHoverTarget(x, y) {
+    if (!(state.hover.target instanceof Element) || !state.hover.target.isConnected) {
+      return false;
+    }
+
+    const rect = state.hover.targetRect;
+    if (
+      rect &&
+      x >= rect.left &&
+      x <= rect.right &&
+      y >= rect.top &&
+      y <= rect.bottom
+    ) {
+      return true;
+    }
+
+    const within = pointWithinElement(state.hover.target, x, y);
+    if (within) {
+      state.hover.targetRect = getElementRectSnapshot(state.hover.target);
+    }
+
+    return within;
+  }
+
+  function getElementRectSnapshot(element) {
+    const rect = element?.getBoundingClientRect?.();
+    if (!rect) return null;
+
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+    };
   }
 
   function pointWithinElement(element, x, y) {

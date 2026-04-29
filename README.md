@@ -7,7 +7,7 @@ media in a draggable, resizable in-page popout.
 
 ## Repository contents
 
-- `src/Image Popout (Safari)-1.5.1.user.js`: the userscript to install.
+- `src/Image Popout (Safari)-1.5.2.user.js`: the userscript to install.
 - `README.md`: this usage and development guide.
 
 There is no build step, package manifest, lint command, or automated test suite.
@@ -56,7 +56,7 @@ with poster/frame fallbacks used when direct replay is not available.
 2. Prefer a manager with `GM_download` and `GM_xmlhttpRequest` support if you
    want the built-in download control to work reliably.
 3. Create a new userscript from
-   `src/Image Popout (Safari)-1.5.1.user.js`.
+   `src/Image Popout (Safari)-1.5.2.user.js`.
 4. Enable it and refresh any pages you want to test.
 
 The userscript metadata currently matches every `http` and `https` page:
@@ -121,7 +121,7 @@ common query parameters when possible. Otherwise, `.bin` is used.
 
 ## Development and testing
 
-Edit `src/Image Popout (Safari)-1.5.1.user.js` directly, reload the userscript in
+Edit `src/Image Popout (Safari)-1.5.2.user.js` directly, reload the userscript in
 Safari, and manually verify behavior on real pages. Useful checks include hover
 previews, keyboard pinning, Alt/Option-click popouts, dragging, resizing,
 copy/open/download controls, keyboard shortcuts, and normal page click/scroll
@@ -130,7 +130,7 @@ behavior.
 For a quick syntax check, run:
 
 ```sh
-node --check 'src/Image Popout (Safari)-1.5.1.user.js'
+node --check 'src/Image Popout (Safari)-1.5.2.user.js'
 ```
 
 ## Security and privacy
