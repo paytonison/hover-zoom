@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      1.5.0
-// @description  Hover images or videos for a near-cursor preview. Video clicks pin, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
+// @version      1.5.1
+// @description  Hover images or videos for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
@@ -634,7 +634,7 @@
       return;
     }
 
-    handlePinClick(event);
+    // Plain clicks should pass through to the page. Pinning is keyboard-only.
   }
 
   function onDocumentMouseDown(event) {
@@ -914,41 +914,6 @@
     state.hover.pinned = false;
     hideHover();
     openPopout(candidate);
-  }
-
-  function handlePinClick(event) {
-    if (!state.hover.enabled || state.popout.open) return;
-    if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
-
-    const candidate = findHoverCandidate(
-      event.target,
-      event.clientX,
-      event.clientY,
-    );
-    if (!candidate || !isTargetLargeEnough(candidate.element)) return;
-    if (!isClickPinnableCandidate(candidate)) return;
-
-    if (
-      candidate.element !== state.hover.target ||
-      candidate.url !== state.hover.url ||
-      !isHoverVisible()
-    ) {
-      activateHover(candidate, event.clientX, event.clientY);
-    }
-
-    toggleHoverPinned();
-  }
-
-  function isClickPinnableCandidate(candidate) {
-    if (!candidate) return false;
-
-    return (
-      candidate.type === "video" ||
-      candidate.previewMode === "video" ||
-      candidate.previewMode === "live" ||
-      candidate.element instanceof HTMLVideoElement ||
-      candidate.hoverTarget instanceof HTMLVideoElement
-    );
   }
 
   function toggleHoverPinned() {
