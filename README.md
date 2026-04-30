@@ -30,8 +30,9 @@ There is no build step, package manifest, lint command, or automated test suite.
 
 ## Supported media
 
-The script is intentionally generic rather than site-specific. It searches the
-element under the pointer and nearby elements at the same screen coordinates for:
+The script uses generic media discovery plus small site-aware URL handling where
+common sites need it. It searches the element under the pointer and nearby
+elements at the same screen coordinates for:
 
 - `<img>` elements, preferring the largest `srcset` candidate when one exists.
 - `currentSrc`, `src`, and common lazy-load attributes: `data-src`,
@@ -41,8 +42,11 @@ element under the pointer and nearby elements at the same screen coordinates for
 - CSS `background-image` URLs on common container elements.
 - `<video>` elements, including `currentSrc`, `src`, and nested `<source>` URLs.
 - Direct video links for popouts and hover previews.
-- Wikimedia media-viewer file hashes and Wikimedia thumbnail URLs, including
-  thumbnail URLs rewritten back to the original upload path when possible.
+- Wikipedia/Wikimedia thumbnails, media-viewer file hashes, and direct upload
+  URLs, including thumbnail URLs rewritten back to the original upload path when
+  possible.
+- Instagram images and videos when the page exposes them as ordinary media
+  elements, background images, or direct media links.
 - `twimg.com` image URLs, with `name=orig` requested when the URL uses Twitter's
   `format` or `name` query parameters.
 
@@ -115,9 +119,6 @@ common query parameters when possible. Otherwise, `.bin` is used.
 - Some dynamic video players expose only blob or MediaSource URLs. Hover preview
   may still work by temporarily moving the live video element, but popout and
   download need a direct media URL.
-- Wikimedia file-page links are not fetched or scraped; the script uses the
-  visible image, direct media URLs, or media-viewer redirect URLs it can derive
-  locally.
 
 ## Development and testing
 
