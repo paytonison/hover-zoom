@@ -82,19 +82,19 @@ Those grants are used only for the download flow.
 
 ## Controls
 
-| Action | Result |
-| --- | --- |
-| Hover a supported media target | Show a near-cursor preview |
-| `P` while a preview is visible | Pin or unpin the current preview |
-| `Z` | Toggle hover previews on or off |
-| `Esc` | Hide the preview and close the popout |
-| Alt/Option-click supported media | Open the media in the popout |
-| Drag the popout title bar | Move the popout |
-| Drag the bottom-right handle | Resize the popout |
-| `Copy URL` | Copy the popout media URL, with a prompt fallback |
-| `Open` | Open the popout media URL in a new tab |
-| `Download` or `D` | Download the current popout media |
-| `Close`, backdrop click, or `Esc` | Close the popout |
+| Action                            | Result                                            |
+| --------------------------------- | ------------------------------------------------- |
+| Hover a supported media target    | Show a near-cursor preview                        |
+| `P` while a preview is visible    | Pin or unpin the current preview                  |
+| `Z`                               | Toggle hover previews on or off                   |
+| `Esc`                             | Hide the preview and close the popout             |
+| Alt/Option-click supported media  | Open the media in the popout                      |
+| Drag the popout title bar         | Move the popout                                   |
+| Drag the bottom-right handle      | Resize the popout                                 |
+| `Copy URL`                        | Copy the popout media URL, with a prompt fallback |
+| `Open`                            | Open the popout media URL in a new tab            |
+| `Download` or `D`                 | Download the current popout media                 |
+| `Close`, backdrop click, or `Esc` | Close the popout                                  |
 
 ## Download behavior
 
@@ -141,3 +141,21 @@ node --check 'src/Image Popout (Safari)-1.5.2.user.js'
 - It reads media URLs from the current page and may request those URLs only when
   loading previews, opening popouts, or downloading media.
 - Treat page content as untrusted input when extending the script.
+
+## Development Philosophy
+
+I made this userscript because the Safari userscripts I found were slow, bloated, or overloaded with unnecessary features. The core problem was simple: display a full-resolution image or video preview from a thumbnail without requiring the user to click through and load the media directly.
+
+This userscript is built specifically for Safari. It uses the browser’s native behavior to improve responsiveness while keeping the feature set focused and lightweight. It works with images and videos on most sites that expose media assets in the page, including sites that wrap media in containers, such as Wikipedia and Instagram. Because it is Safari-native, I also added a little Liquid Glass flair.
+
+The development process was agent-assisted, but not passive. I collaborated with ChatGPT to reason through the design, especially because web development and media-serving edge cases are not my usual domain. We worked through the initial concept, refined the feature behavior, assembled implementation prompts, and then used Codex to generate and modify the code.
+
+As with any software project, issues appeared during testing. I would have Codex write or update the code, test the script directly in Safari, evaluate whether the behavior was actually useful, and identify bugs or edge cases. Then I would report the problem back in concrete terms and direct the next fix. Through that loop, bugs were squashed, edge cases were handled, and the userscript became progressively more robust.
+
+When I wanted a new feature, the process repeated: discuss the idea with ChatGPT, understand the relevant web-development or media-handling mechanics, turn that into a precise prompt, give it to Codex, test the result, and iterate.
+
+This is the development pattern I think agentic programming is moving toward. Right now, coding agents are often treated as “insert words, get program,” which is dismissed as “vibe coding”: the developer accepts whatever the agent produces and keeps moving until something breaks. My process is different.
+
+I use ChatGPT and Codex as collaborators in the development loop: discussing features, formulating implementation plans, directing changes, testing software live, identifying failures, and iterating when bugs or useful surprises emerge. The agent is not just autocomplete, and the human is not just a prompt dispenser. The result is a workflow where the human provides architecture, judgment, testing, taste, and direction, while the agent accelerates implementation.
+
+I believe this kind of collaboration will become a major part of software development as agents become more deeply integrated into programming workflows. The relevant skill will not only be raw coding ability, but also the ability to use agents effectively: specifying intent, supervising implementation, testing behavior, recognizing edge cases, and turning a rough generated artifact into working software.
