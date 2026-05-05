@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      1.5.2
-// @description  Hover images or videos for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
+// @version      1.5.3
+// @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
@@ -39,6 +39,21 @@
   const CONTEXT_MENU_SUPPRESSION_MS = 2000;
   const BACKGROUND_IMAGE_SELECTOR =
     "div, span, a, button, figure, section, article, li";
+  const ONLYFANS_HOST_PATTERN = /(^|\.)onlyfans\.com$/i;
+  const ONLYFANS_MEDIA_CONTAINER_SELECTOR = [
+    "article",
+    "figure",
+    "picture",
+    "a[href*='/posts/']",
+    "a[href*='/photos/']",
+    "a[href*='/videos/']",
+    "[data-testid*='media']",
+    "[class*='b-post__media']",
+    "[class*='post_media']",
+    "[class*='media-item']",
+    "[class*='media-container']",
+    "[class*='mediaContainer']",
+  ].join(", ");
   const NESTED_IMAGE_CONTAINER_SELECTOR = [
     "a",
     "figure",
@@ -57,6 +72,16 @@
     "data-hires",
     "data-full",
     "data-large",
+    "data-full-src",
+    "data-preview",
+    "data-thumb",
+    "data-thumbnail",
+    "data-poster",
+  ];
+  const LAZY_IMAGE_SRCSET_ATTRS = [
+    "data-srcset",
+    "data-lazy-srcset",
+    "data-original-srcset",
   ];
 
   const CONFIG = {
@@ -1949,6 +1974,9 @@
     const path = getMediaPathAtPoint(start, clientX, clientY);
     if (!path.length) return null;
 
+    const siteCandidate = findSiteMediaCandidate(path, clientX, clientY, true);
+    if (siteCandidate) return siteCandidate;
+
     const videoCandidate = findHoverVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
@@ -1964,12 +1992,194 @@
     const path = getMediaPathAtPoint(start, clientX, clientY);
     if (!path.length) return null;
 
+    const siteCandidate = findSiteMediaCandidate(path, clientX, clientY, false);
+    if (siteCandidate) return siteCandidate;
+
     const videoCandidate = findPopoutVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
     const imageCandidate = findImageCandidate(path, clientX, clientY);
     if (imageCandidate) {
       return { ...imageCandidate, type: "image" };
+    }
+
+    return null;
+  }
+
+  function findSiteMediaCandidate(path, clientX, clientY, forHover) {
+    if (isOnlyFansHost()) {
+      const onlyFansCandidate = findOnlyFansMediaCandidate(
+        path,
+        clientX,
+        clientY,
+        forHover,
+      );
+      if (onlyFansCandidate) return onlyFansCandidate;
+    }
+
+    return null;
+  }
+
+  function isOnlyFansHost() {
+    try {
+      return ONLYFANS_HOST_PATTERN.test(window.location.hostname || "");
+    } catch {
+      return false;
+    }
+  }
+
+  function findOnlyFansMediaCandidate(path, clientX, clientY, forHover) {
+    const containers = collectOnlyFansMediaContainers(path, clientX, clientY);
+
+    for (const container of containers) {
+      const video = findBestNestedMediaElement(
+        container,
+        "video",
+        clientX,
+        clientY,
+      );
+      if (video instanceof HTMLVideoElement) {
+        const candidate = forHover
+          ? buildHoverVideoCandidate(video)
+          : buildPopoutVideoCandidate(video);
+        if (candidate) {
+          return {
+            ...candidate,
+            element: container,
+            hoverTarget: container,
+          };
+        }
+      }
+
+      const image = findBestNestedMediaElement(
+        container,
+        "img",
+        clientX,
+        clientY,
+      );
+      if (image instanceof HTMLImageElement) {
+        const candidate = buildImageCandidate(image);
+        if (candidate) {
+          return forHover
+            ? { ...candidate, element: container, hoverTarget: container, previewMode: "image" }
+            : { ...candidate, element: container, type: "image" };
+        }
+      }
+
+      const backgroundUrl = getBackgroundImageUrl(container);
+      if (backgroundUrl) {
+        return forHover
+          ? { element: container, hoverTarget: container, url: backgroundUrl, previewMode: "image" }
+          : { element: container, url: backgroundUrl, type: "image" };
+      }
+    }
+
+    return null;
+  }
+
+  function collectOnlyFansMediaContainers(path, clientX, clientY) {
+    const containers = [];
+    const seen = new Set();
+
+    const push = (element) => {
+      if (!(element instanceof Element) || seen.has(element)) return;
+      if (!shouldSearchOnlyFansContainer(element, clientX, clientY)) return;
+      seen.add(element);
+      containers.push(element);
+    };
+
+    for (const element of path) {
+      if (!(element instanceof Element)) continue;
+
+      push(element);
+
+      const closest = element.closest?.(ONLYFANS_MEDIA_CONTAINER_SELECTOR);
+      push(closest);
+    }
+
+    return containers;
+  }
+
+  function shouldSearchOnlyFansContainer(element, clientX, clientY) {
+    if (!(element instanceof Element)) return false;
+    if (element === document.documentElement || element === document.body) return false;
+    if (!pointWithinElement(element, clientX, clientY)) return false;
+
+    const rect = element.getBoundingClientRect?.();
+    if (!rect) return false;
+    if (rect.width < CONFIG.minTargetPixels || rect.height < CONFIG.minTargetPixels) {
+      return false;
+    }
+
+    const { width: vw, height: vh } = getViewport();
+    const tooLargeToBeMedia = rect.width > vw * 1.25 || rect.height > vh * 1.75;
+    if (tooLargeToBeMedia && !element.matches?.(ONLYFANS_MEDIA_CONTAINER_SELECTOR)) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function findBestNestedMediaElement(container, selector, clientX, clientY) {
+    if (!(container instanceof Element)) return null;
+
+    const candidates = [];
+    const push = (element) => {
+      if (!(element instanceof Element)) return;
+      if (!isVisibleMediaCandidate(element)) return;
+      candidates.push(element);
+    };
+
+    if (container.matches?.(selector)) push(container);
+    for (const element of container.querySelectorAll(selector)) push(element);
+
+    if (!candidates.length) return null;
+
+    const pointed = candidates
+      .filter((element) => pointWithinElement(element, clientX, clientY))
+      .sort(sortElementsByAreaDesc);
+    return pointed[0] || null;
+  }
+
+  function isVisibleMediaCandidate(element) {
+    const rect = element.getBoundingClientRect?.();
+    if (!rect) return false;
+    if (rect.width < CONFIG.minTargetPixels || rect.height < CONFIG.minTargetPixels) {
+      return false;
+    }
+
+    try {
+      const style = getComputedStyle(element);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+      if (Number(style.opacity) === 0) return false;
+    } catch {}
+
+    return true;
+  }
+
+  function sortElementsByAreaDesc(a, b) {
+    return getElementArea(b) - getElementArea(a);
+  }
+
+  function getElementArea(element) {
+    const rect = element.getBoundingClientRect?.();
+    if (!rect) return 0;
+    return Math.max(0, rect.width) * Math.max(0, rect.height);
+  }
+
+  function buildPopoutVideoCandidate(video) {
+    const videoUrl = pickBestVideoUrl(video);
+    if (videoUrl && isReplayableHoverVideoUrl(videoUrl)) {
+      return { element: video, type: "video", url: videoUrl };
+    }
+
+    const fallbackUrl = pickVideoPreviewUrl(video);
+    if (fallbackUrl) {
+      return { element: video, type: "image", url: fallbackUrl };
+    }
+
+    if (videoUrl) {
+      return { element: video, type: "video", url: videoUrl };
     }
 
     return null;
@@ -2217,6 +2427,15 @@
     const srcsetUrl = pickBestSrcsetUrl(image.getAttribute("srcset") || image.srcset || "");
     if (srcsetUrl) return srcsetUrl;
 
+    const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
+    if (pictureSrcsetUrl) return pictureSrcsetUrl;
+
+    for (const attr of LAZY_IMAGE_SRCSET_ATTRS) {
+      const value = image.getAttribute(attr) || "";
+      const attrSrcsetUrl = pickBestSrcsetUrl(value);
+      if (attrSrcsetUrl) return attrSrcsetUrl;
+    }
+
     const currentSrc = resolveUrl(image.currentSrc || "");
     if (currentSrc) return currentSrc;
 
@@ -2226,6 +2445,19 @@
     }
 
     return resolveUrl(image.src || "");
+  }
+
+  function pickBestPictureSourceUrl(image) {
+    const picture = image.closest?.("picture");
+    if (!(picture instanceof HTMLPictureElement)) return "";
+
+    let bestUrl = "";
+    for (const source of picture.querySelectorAll("source[srcset]")) {
+      const sourceUrl = pickBestSrcsetUrl(source.getAttribute("srcset") || "");
+      if (sourceUrl) bestUrl = sourceUrl;
+    }
+
+    return bestUrl;
   }
 
   function pickBestVideoUrl(video) {
