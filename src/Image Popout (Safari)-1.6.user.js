@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      1.5.3
+// @version      1.6
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -647,10 +647,22 @@
     }
 
     const action = target.closest("[data-action]")?.getAttribute("data-action");
-    if (action === "close") closePopout();
-    if (action === "open") openPopoutUrlInNewTab();
-    if (action === "copy") copyPopoutUrl();
-    if (action === "download") void downloadCurrentMedia();
+    switch (action) {
+      case "close":
+        closePopout();
+        break;
+      case "open":
+        openPopoutUrlInNewTab();
+        break;
+      case "copy":
+        void copyPopoutUrl();
+        break;
+      case "download":
+        void downloadCurrentMedia();
+        break;
+      default:
+        break;
+    }
   }
 
   function onDocumentClick(event) {
@@ -658,7 +670,7 @@
 
     if (shouldSuppressDocumentClick()) return;
     if (isInsideUserscriptUi(event.target)) return;
-    if (event.button !== 0 || event.ctrlKey || event.metaKey) return;
+    if (!isPlainPrimaryClick(event)) return;
 
     if (event.altKey) {
       handleAltClick(event);
@@ -671,13 +683,7 @@
   function onDocumentMouseDown(event) {
     if (!(event instanceof MouseEvent)) return;
 
-    const plainPrimaryClick = (
-      event.button === 0 &&
-      !event.ctrlKey &&
-      !event.metaKey
-    );
-
-    if (!plainPrimaryClick) {
+    if (!isPlainPrimaryClick(event)) {
       state.input.suppressClick = true;
       return;
     }
@@ -708,6 +714,11 @@
     state.input.suppressClickUntil = 0;
     return suppressClick;
   }
+
+  function isPlainPrimaryClick(event) {
+    return event.button === 0 && !event.ctrlKey && !event.metaKey;
+  }
+
   function onDocumentMouseMove(event) {
     state.hover.mouseX = event.clientX;
     state.hover.mouseY = event.clientY;
@@ -716,14 +727,11 @@
 
     if (event.target !== state.hover.lastEventTarget) {
       state.hover.lastEventTarget = event.target;
-      const candidate = findHoverCandidate(
-        event.target,
-        event.clientX,
-        event.clientY,
-      );
-      if (candidate && isTargetLargeEnough(candidate.element)) {
-        activateHover(candidate, event.clientX, event.clientY);
-      } else if (
+      if (activateHoverCandidateAtPoint(event.target, event.clientX, event.clientY)) {
+        return;
+      }
+
+      if (
         state.hover.target &&
         !pointWithinHoverTarget(event.clientX, event.clientY)
       ) {
@@ -737,20 +745,22 @@
     if (
       !pointWithinHoverTarget(event.clientX, event.clientY)
     ) {
-      const candidate = findHoverCandidate(
-        document.elementFromPoint(event.clientX, event.clientY),
-        event.clientX,
-        event.clientY,
-      );
-      if (candidate && isTargetLargeEnough(candidate.element)) {
-        activateHover(candidate, event.clientX, event.clientY);
-      } else {
+      const pointTarget = document.elementFromPoint(event.clientX, event.clientY);
+      if (!activateHoverCandidateAtPoint(pointTarget, event.clientX, event.clientY)) {
         hideHover();
       }
       return;
     }
 
     updateHoverPosition(event.clientX, event.clientY);
+  }
+
+  function activateHoverCandidateAtPoint(start, clientX, clientY) {
+    const candidate = findHoverCandidate(start, clientX, clientY);
+    if (!candidate || !isTargetLargeEnough(candidate.element)) return false;
+
+    activateHover(candidate, clientX, clientY);
+    return true;
   }
 
   function onWindowKeyDown(event) {
@@ -1013,23 +1023,25 @@
 
   function hideHover() {
     cancelHoverPositionFrame();
+    if (state.ui.ready) {
+      teardownHoverLiveElement();
+      clearHoverVideo();
+      showHoverPreviewMode("image");
+    }
+
+    resetHoverCandidateState();
+
     if (!state.ui.ready) {
-      state.hover.target = null;
-      state.hover.targetRect = null;
-      state.hover.url = "";
-      state.hover.previewMode = "image";
-      state.hover.fallbackUrl = "";
-      state.hover.videoCurrentTime = 0;
-      state.hover.videoShouldPlay = false;
-      state.hover.naturalW = 0;
-      state.hover.naturalH = 0;
-      state.hover.lastEventTarget = null;
       return;
     }
 
-    teardownHoverLiveElement();
-    clearHoverVideo();
-    showHoverPreviewMode("image");
+    state.ui.hoverBadge.style.display = "none";
+    state.ui.hoverWrap.style.display = "none";
+    state.ui.hoverWrap.style.transform = "translate3d(-9999px, -9999px, 0)";
+    updateHoverInteractivity();
+  }
+
+  function resetHoverCandidateState() {
     state.hover.target = null;
     state.hover.targetRect = null;
     state.hover.url = "";
@@ -1040,10 +1052,6 @@
     state.hover.naturalW = 0;
     state.hover.naturalH = 0;
     state.hover.lastEventTarget = null;
-    state.ui.hoverBadge.style.display = "none";
-    state.ui.hoverWrap.style.display = "none";
-    state.ui.hoverWrap.style.transform = "translate3d(-9999px, -9999px, 0)";
-    updateHoverInteractivity();
   }
 
   function isHoverVisible() {
@@ -1372,18 +1380,13 @@
     left = clamp(left, pad, Math.max(pad, vw - width - pad));
     top = clamp(top, pad, Math.max(pad, vh - height - pad));
 
-    state.ui.hoverWrap.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
+    state.ui.hoverWrap.style.transform = (
+      `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`
+    );
   }
 
   function openPopout(media) {
-    const mediaUrl =
-      typeof media === "string"
-        ? media
-        : typeof media?.url === "string"
-          ? media.url
-          : "";
-    const mediaType =
-      typeof media === "object" && media?.type === "video" ? "video" : "image";
+    const { mediaUrl, mediaType } = getPopoutMediaDescriptor(media);
 
     if (!mediaUrl) return;
     ensureUi();
@@ -1405,6 +1408,30 @@
     );
 
     const token = ++state.popout.loadToken;
+    clearPopoutLoadHandlers();
+
+    if (mediaType === "video") {
+      loadPopoutVideo(mediaUrl, token);
+      return;
+    }
+
+    loadPopoutImage(mediaUrl, token);
+  }
+
+  function getPopoutMediaDescriptor(media) {
+    const mediaUrl =
+      typeof media === "string"
+        ? media
+        : typeof media?.url === "string"
+          ? media.url
+          : "";
+    const mediaType =
+      typeof media === "object" && media?.type === "video" ? "video" : "image";
+
+    return { mediaUrl, mediaType };
+  }
+
+  function clearPopoutLoadHandlers() {
     const img = state.ui.popoutImg;
     const video = state.ui.popoutVideo;
 
@@ -1412,33 +1439,40 @@
     img.onerror = null;
     video.onloadedmetadata = null;
     video.onerror = null;
+  }
 
-    if (mediaType === "video") {
-      img.style.display = "none";
-      img.removeAttribute("src");
+  function loadPopoutVideo(mediaUrl, token) {
+    const img = state.ui.popoutImg;
+    const video = state.ui.popoutVideo;
 
-      video.style.display = "block";
-      clearVideoSource(video);
-      video.src = mediaUrl;
+    img.style.display = "none";
+    img.removeAttribute("src");
 
-      video.onloadedmetadata = () => {
-        if (token !== state.popout.loadToken) return;
-        if (state.popout.autoFit) fitPopoutToMedia();
-      };
+    video.style.display = "block";
+    clearVideoSource(video);
+    video.src = mediaUrl;
 
-      video.onerror = () => {
-        if (token !== state.popout.loadToken) return;
-        showPopoutToast("Failed to load video");
-      };
+    video.onloadedmetadata = () => {
+      if (token !== state.popout.loadToken) return;
+      if (state.popout.autoFit) fitPopoutToMedia();
+    };
 
-      video.load();
-      return;
-    }
+    video.onerror = () => {
+      if (token !== state.popout.loadToken) return;
+      showPopoutToast("Failed to load video");
+    };
+
+    video.load();
+  }
+
+  function loadPopoutImage(mediaUrl, token) {
+    const img = state.ui.popoutImg;
+    const video = state.ui.popoutVideo;
 
     video.style.display = "none";
     clearVideoSource(video);
-
     img.style.display = "block";
+
     img.onload = () => {
       if (token !== state.popout.loadToken) return;
       if (state.popout.autoFit) fitPopoutToMedia();
@@ -2043,11 +2077,7 @@
           ? buildHoverVideoCandidate(video)
           : buildPopoutVideoCandidate(video);
         if (candidate) {
-          return {
-            ...candidate,
-            element: container,
-            hoverTarget: container,
-          };
+          return withOnlyFansContainer(candidate, container, forHover);
         }
       }
 
@@ -2060,21 +2090,38 @@
       if (image instanceof HTMLImageElement) {
         const candidate = buildImageCandidate(image);
         if (candidate) {
-          return forHover
-            ? { ...candidate, element: container, hoverTarget: container, previewMode: "image" }
-            : { ...candidate, element: container, type: "image" };
+          return withOnlyFansContainer(candidate, container, forHover);
         }
       }
 
       const backgroundUrl = getBackgroundImageUrl(container);
       if (backgroundUrl) {
-        return forHover
-          ? { element: container, hoverTarget: container, url: backgroundUrl, previewMode: "image" }
-          : { element: container, url: backgroundUrl, type: "image" };
+        return withOnlyFansContainer(
+          { element: container, url: backgroundUrl },
+          container,
+          forHover,
+        );
       }
     }
 
     return null;
+  }
+
+  function withOnlyFansContainer(candidate, container, forHover) {
+    if (forHover) {
+      return {
+        ...candidate,
+        element: container,
+        hoverTarget: container,
+        previewMode: candidate.previewMode || "image",
+      };
+    }
+
+    return {
+      ...candidate,
+      element: container,
+      type: candidate.type || "image",
+    };
   }
 
   function collectOnlyFansMediaContainers(path, clientX, clientY) {
