@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.0.0
+// @version      2.0.1
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -36,6 +36,7 @@
   };
 
   const STORAGE_KEY = "image_popout_safari_v2";
+  const DEBUG_STORAGE_KEY = "image_popout_safari_debug";
   const CONTEXT_MENU_SUPPRESSION_MS = 2000;
   const BACKGROUND_IMAGE_SELECTOR =
     "div, span, a, button, figure, section, article, li";
@@ -217,6 +218,49 @@
     } catch {
       return { enabled: true };
     }
+  }
+
+  function debugLog(label, value = null) {
+    if (!isDebugEnabled()) return;
+
+    try {
+      console.debug("[Image Popout]", label, value);
+    } catch {}
+  }
+
+  function isDebugEnabled() {
+    try {
+      return localStorage.getItem(DEBUG_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  function describeCandidate(candidate) {
+    if (!candidate) return null;
+
+    return {
+      previewMode: candidate.previewMode || candidate.type || "image",
+      url: candidate.url || "",
+      fallbackUrl: candidate.fallbackUrl || "",
+      element: describeElement(candidate.element),
+      hoverTarget: describeElement(candidate.hoverTarget),
+    };
+  }
+
+  function describeElement(element) {
+    if (!(element instanceof Element)) return "";
+
+    const id = element.id ? `#${element.id}` : "";
+    const className = String(element.className || "")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 3)
+      .map((name) => `.${name}`)
+      .join("");
+
+    return `${element.localName}${id}${className}`;
   }
 
   function savePrefs() {
@@ -727,7 +771,14 @@
 
     if (event.target !== state.hover.lastEventTarget) {
       state.hover.lastEventTarget = event.target;
-      if (activateHoverCandidateAtPoint(event.target, event.clientX, event.clientY)) {
+      if (
+        activateHoverCandidateAtPoint(
+          event.target,
+          event.clientX,
+          event.clientY,
+          event,
+        )
+      ) {
         return;
       }
 
@@ -745,8 +796,14 @@
     if (
       !pointWithinHoverTarget(event.clientX, event.clientY)
     ) {
-      const pointTarget = document.elementFromPoint(event.clientX, event.clientY);
-      if (!activateHoverCandidateAtPoint(pointTarget, event.clientX, event.clientY)) {
+      if (
+        !activateHoverCandidateAtPoint(
+          event.target,
+          event.clientX,
+          event.clientY,
+          event,
+        )
+      ) {
         hideHover();
       }
       return;
@@ -755,11 +812,15 @@
     updateHoverPosition(event.clientX, event.clientY);
   }
 
-  function activateHoverCandidateAtPoint(start, clientX, clientY) {
-    const candidate = findHoverCandidate(start, clientX, clientY);
-    if (!candidate || !isTargetLargeEnough(candidate.element)) return false;
+  function activateHoverCandidateAtPoint(start, clientX, clientY, event = null) {
+    const lookup = createMediaLookup(start, clientX, clientY, event);
+    const candidate = findHoverCandidate(lookup);
+    if (!candidate || !isTargetLargeEnough(candidate.element, lookup)) {
+      return false;
+    }
 
-    activateHover(candidate, clientX, clientY);
+    debugLog("hover candidate", describeCandidate(candidate));
+    activateHover(candidate, clientX, clientY, lookup);
     return true;
   }
 
@@ -949,12 +1010,14 @@
       event.target,
       event.clientX,
       event.clientY,
+      event,
     );
     if (!candidate) return;
 
     event.preventDefault();
     event.stopPropagation();
 
+    debugLog("popout candidate", describeCandidate(candidate));
     state.hover.pinned = false;
     hideHover();
     openPopout(candidate);
@@ -976,14 +1039,22 @@
     showHoverToast(state.hover.pinned ? "Pinned preview" : "Unpinned");
   }
 
-  function activateHover(candidate, mouseX, mouseY) {
+  function activateHover(candidate, mouseX, mouseY, lookup = null) {
     ensureUi();
 
     const previewMode = candidate.previewMode || "image";
+    const candidateUrl = candidate.url || "";
+    const fallbackUrl = candidate.fallbackUrl || "";
+    const sameMedia = isSameHoverMedia(
+      previewMode,
+      candidateUrl,
+      fallbackUrl,
+      candidate.liveElement,
+    );
 
-    state.hover.url = candidate.url || "";
+    state.hover.url = candidateUrl;
     state.hover.previewMode = previewMode;
-    state.hover.fallbackUrl = candidate.fallbackUrl || "";
+    state.hover.fallbackUrl = fallbackUrl;
     state.hover.videoCurrentTime = clamp(
       Number(candidate.currentTime) || 0,
       0,
@@ -1000,16 +1071,27 @@
     if (previewMode === "live") {
       setHoverTarget(attachHoverLiveElement(candidate));
     } else if (previewMode === "video") {
-      setHoverTarget(candidate.hoverTarget || candidate.element);
-      setHoverVideoCandidate(candidate);
-    } else {
-      setHoverTarget(candidate.hoverTarget || candidate.element);
+      setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
       if (
-        state.ui.hoverImg.src !== candidate.url ||
+        sameMedia &&
+        state.ui.hoverVideo.src === candidateUrl &&
+        state.hover.naturalW &&
+        state.hover.naturalH
+      ) {
+        showHoverPreviewMode("video");
+        applyHoverSize();
+      } else {
+        setHoverVideoCandidate(candidate);
+      }
+    } else {
+      setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
+      if (
+        !sameMedia ||
+        state.ui.hoverImg.src !== candidateUrl ||
         !state.hover.naturalW ||
         !state.hover.naturalH
       ) {
-        setHoverImageUrl(candidate.url);
+        setHoverImageUrl(candidateUrl);
       } else {
         showHoverPreviewMode("image");
         clearHoverVideo();
@@ -1019,6 +1101,19 @@
     }
 
     updateHoverPosition(mouseX, mouseY);
+  }
+
+  function isSameHoverMedia(previewMode, url, fallbackUrl, liveElement) {
+    if (!isHoverVisible()) return false;
+    if (state.hover.previewMode !== previewMode) return false;
+    if (state.hover.url !== url) return false;
+    if (state.hover.fallbackUrl !== fallbackUrl) return false;
+
+    if (previewMode === "live") {
+      return state.hover.live?.element === liveElement;
+    }
+
+    return true;
   }
 
   function hideHover() {
@@ -1970,7 +2065,9 @@
     };
   }
 
-  function findImageCandidate(path, clientX, clientY) {
+  function findImageCandidate(lookup) {
+    const { path } = lookup;
+
     for (const element of path) {
       if (element instanceof HTMLImageElement) {
         const candidate = buildImageCandidate(element);
@@ -1979,7 +2076,7 @@
     }
 
     for (const element of path) {
-      const nestedImage = findNestedImageAtPoint(element, clientX, clientY);
+      const nestedImage = findNestedImageAtPoint(element, lookup);
       if (nestedImage) {
         const candidate = buildImageCandidate(nestedImage);
         if (candidate) return candidate;
@@ -2004,17 +2101,17 @@
     return null;
   }
 
-  function findHoverCandidate(start, clientX, clientY) {
-    const path = getMediaPathAtPoint(start, clientX, clientY);
+  function findHoverCandidate(lookup) {
+    const { path } = lookup;
     if (!path.length) return null;
 
-    const siteCandidate = findSiteMediaCandidate(path, clientX, clientY, true);
+    const siteCandidate = findSiteMediaCandidate(lookup, true);
     if (siteCandidate) return siteCandidate;
 
     const videoCandidate = findHoverVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(path, clientX, clientY);
+    const imageCandidate = findImageCandidate(lookup);
     if (imageCandidate) {
       return { ...imageCandidate, previewMode: "image" };
     }
@@ -2022,17 +2119,18 @@
     return null;
   }
 
-  function findPopoutCandidate(start, clientX, clientY) {
-    const path = getMediaPathAtPoint(start, clientX, clientY);
+  function findPopoutCandidate(start, clientX, clientY, event = null) {
+    const lookup = createMediaLookup(start, clientX, clientY, event);
+    const { path } = lookup;
     if (!path.length) return null;
 
-    const siteCandidate = findSiteMediaCandidate(path, clientX, clientY, false);
+    const siteCandidate = findSiteMediaCandidate(lookup, false);
     if (siteCandidate) return siteCandidate;
 
     const videoCandidate = findPopoutVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(path, clientX, clientY);
+    const imageCandidate = findImageCandidate(lookup);
     if (imageCandidate) {
       return { ...imageCandidate, type: "image" };
     }
@@ -2040,12 +2138,10 @@
     return null;
   }
 
-  function findSiteMediaCandidate(path, clientX, clientY, forHover) {
+  function findSiteMediaCandidate(lookup, forHover) {
     if (isOnlyFansHost()) {
       const onlyFansCandidate = findOnlyFansMediaCandidate(
-        path,
-        clientX,
-        clientY,
+        lookup,
         forHover,
       );
       if (onlyFansCandidate) return onlyFansCandidate;
@@ -2062,15 +2158,14 @@
     }
   }
 
-  function findOnlyFansMediaCandidate(path, clientX, clientY, forHover) {
-    const containers = collectOnlyFansMediaContainers(path, clientX, clientY);
+  function findOnlyFansMediaCandidate(lookup, forHover) {
+    const containers = collectOnlyFansMediaContainers(lookup);
 
     for (const container of containers) {
       const video = findBestNestedMediaElement(
         container,
         "video",
-        clientX,
-        clientY,
+        lookup,
       );
       if (video instanceof HTMLVideoElement) {
         const candidate = forHover
@@ -2084,8 +2179,7 @@
       const image = findBestNestedMediaElement(
         container,
         "img",
-        clientX,
-        clientY,
+        lookup,
       );
       if (image instanceof HTMLImageElement) {
         const candidate = buildImageCandidate(image);
@@ -2124,13 +2218,14 @@
     };
   }
 
-  function collectOnlyFansMediaContainers(path, clientX, clientY) {
+  function collectOnlyFansMediaContainers(lookup) {
+    const { path } = lookup;
     const containers = [];
     const seen = new Set();
 
     const push = (element) => {
       if (!(element instanceof Element) || seen.has(element)) return;
-      if (!shouldSearchOnlyFansContainer(element, clientX, clientY)) return;
+      if (!shouldSearchOnlyFansContainer(element, lookup)) return;
       seen.add(element);
       containers.push(element);
     };
@@ -2147,13 +2242,13 @@
     return containers;
   }
 
-  function shouldSearchOnlyFansContainer(element, clientX, clientY) {
+  function shouldSearchOnlyFansContainer(element, lookup) {
     if (!(element instanceof Element)) return false;
     if (element === document.documentElement || element === document.body) return false;
-    if (!pointWithinElement(element, clientX, clientY)) return false;
 
-    const rect = element.getBoundingClientRect?.();
+    const rect = getElementRect(element, lookup);
     if (!rect) return false;
+    if (!pointWithinRect(rect, lookup.clientX, lookup.clientY)) return false;
     if (rect.width < CONFIG.minTargetPixels || rect.height < CONFIG.minTargetPixels) {
       return false;
     }
@@ -2167,50 +2262,63 @@
     return true;
   }
 
-  function findBestNestedMediaElement(container, selector, clientX, clientY) {
+  function findBestNestedMediaElement(container, selector, lookup) {
     if (!(container instanceof Element)) return null;
 
-    const candidates = [];
+    let bestElement = null;
+    let bestArea = -1;
+
     const push = (element) => {
       if (!(element instanceof Element)) return;
-      if (!isVisibleMediaCandidate(element)) return;
-      candidates.push(element);
+      const rect = getVisibleMediaRect(element, lookup);
+      if (!rect || !pointWithinRect(rect, lookup.clientX, lookup.clientY)) return;
+
+      const area = getRectArea(rect);
+      if (area > bestArea) {
+        bestArea = area;
+        bestElement = element;
+      }
     };
 
     if (container.matches?.(selector)) push(container);
-    for (const element of container.querySelectorAll(selector)) push(element);
-
-    if (!candidates.length) return null;
-
-    const pointed = candidates
-      .filter((element) => pointWithinElement(element, clientX, clientY))
-      .sort(sortElementsByAreaDesc);
-    return pointed[0] || null;
-  }
-
-  function isVisibleMediaCandidate(element) {
-    const rect = element.getBoundingClientRect?.();
-    if (!rect) return false;
-    if (rect.width < CONFIG.minTargetPixels || rect.height < CONFIG.minTargetPixels) {
-      return false;
+    for (const element of querySelectorAllCached(container, selector, lookup)) {
+      push(element);
     }
 
-    try {
-      const style = getComputedStyle(element);
-      if (style.display === "none" || style.visibility === "hidden") return false;
-      if (Number(style.opacity) === 0) return false;
-    } catch {}
-
-    return true;
+    return bestElement;
   }
 
-  function sortElementsByAreaDesc(a, b) {
-    return getElementArea(b) - getElementArea(a);
+  function getVisibleMediaRect(element, lookup = null) {
+    if (!(element instanceof Element)) return null;
+    if (lookup?.visibleMedia?.has(element)) {
+      return lookup.visibleMedia.get(element);
+    }
+
+    let visibleRect = null;
+    const rect = getElementRect(element, lookup);
+    if (
+      rect &&
+      rect.width >= CONFIG.minTargetPixels &&
+      rect.height >= CONFIG.minTargetPixels
+    ) {
+      visibleRect = rect;
+      try {
+        const style = getComputedStyle(element);
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          Number(style.opacity) === 0
+        ) {
+          visibleRect = null;
+        }
+      } catch {}
+    }
+
+    lookup?.visibleMedia?.set(element, visibleRect);
+    return visibleRect;
   }
 
-  function getElementArea(element) {
-    const rect = element.getBoundingClientRect?.();
-    if (!rect) return 0;
+  function getRectArea(rect) {
     return Math.max(0, rect.width) * Math.max(0, rect.height);
   }
 
@@ -2262,10 +2370,38 @@
     return null;
   }
 
-  function getMediaPathAtPoint(start, clientX, clientY) {
-    if (!(start instanceof Element)) return [];
-    if (isInsideUserscriptUi(start)) return [];
-    return getElementPathAtPoint(start, clientX, clientY);
+  function createMediaLookup(start, clientX, clientY, event = null) {
+    // One media lookup can touch the same containers repeatedly; keep layout
+    // reads and selector walks scoped to this pointer event.
+    const lookup = {
+      start,
+      clientX,
+      clientY,
+      eventPath: getEventComposedPath(event),
+      rects: new WeakMap(),
+      selectorResults: new WeakMap(),
+      visibleMedia: new WeakMap(),
+      path: [],
+    };
+
+    lookup.path = getMediaPathAtPoint(lookup);
+    return lookup;
+  }
+
+  function getEventComposedPath(event) {
+    if (!event || typeof event.composedPath !== "function") return [];
+
+    try {
+      return event.composedPath();
+    } catch {
+      return [];
+    }
+  }
+
+  function getMediaPathAtPoint(lookup) {
+    if (!(lookup.start instanceof Element)) return [];
+    if (isInsideUserscriptUi(lookup.start)) return [];
+    return getElementPathAtPoint(lookup);
   }
 
   function buildLinkedVideoCandidate(element, forHover) {
@@ -2294,7 +2430,8 @@
     };
   }
 
-  function getElementsAtPoint(start, clientX, clientY) {
+  function getElementsAtPoint(lookup) {
+    const { start, clientX, clientY } = lookup;
     const elements = [];
     const seen = new Set();
 
@@ -2305,6 +2442,10 @@
     };
 
     push(start);
+
+    for (const element of lookup.eventPath) {
+      push(element);
+    }
 
     if (
       typeof clientX === "number" &&
@@ -2321,11 +2462,11 @@
     return elements;
   }
 
-  function getElementPathAtPoint(start, clientX, clientY) {
+  function getElementPathAtPoint(lookup) {
     const path = [];
     const seen = new Set();
 
-    for (const baseElement of getElementsAtPoint(start, clientX, clientY)) {
+    for (const baseElement of getElementsAtPoint(lookup)) {
       for (let element = baseElement; element; element = element.parentElement) {
         if (seen.has(element)) break;
         seen.add(element);
@@ -2345,8 +2486,8 @@
     );
   }
 
-  function isTargetLargeEnough(element) {
-    const rect = element.getBoundingClientRect?.();
+  function isTargetLargeEnough(element, lookup = null) {
+    const rect = getElementRect(element, lookup);
     if (!rect) return false;
     return (
       rect.width >= CONFIG.minTargetPixels &&
@@ -2354,9 +2495,9 @@
     );
   }
 
-  function setHoverTarget(element) {
+  function setHoverTarget(element, lookup = null) {
     state.hover.target = element;
-    state.hover.targetRect = getElementRectSnapshot(element);
+    state.hover.targetRect = getElementRectSnapshot(element, lookup);
   }
 
   function pointWithinHoverTarget(x, y) {
@@ -2383,8 +2524,8 @@
     return within;
   }
 
-  function getElementRectSnapshot(element) {
-    const rect = element?.getBoundingClientRect?.();
+  function getElementRectSnapshot(element, lookup = null) {
+    const rect = getElementRect(element, lookup);
     if (!rect) return null;
 
     return {
@@ -2395,10 +2536,47 @@
     };
   }
 
-  function pointWithinElement(element, x, y) {
-    const rect = element.getBoundingClientRect?.();
+  function pointWithinElement(element, x, y, lookup = null) {
+    const rect = getElementRect(element, lookup);
     if (!rect) return false;
+    return pointWithinRect(rect, x, y);
+  }
+
+  function pointWithinRect(rect, x, y) {
     return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+  }
+
+  function getElementRect(element, lookup = null) {
+    if (!(element instanceof Element)) return null;
+
+    if (!lookup?.rects) {
+      return element.getBoundingClientRect?.() || null;
+    }
+
+    if (lookup.rects.has(element)) {
+      return lookup.rects.get(element);
+    }
+
+    const rect = element.getBoundingClientRect?.() || null;
+    lookup.rects.set(element, rect);
+    return rect;
+  }
+
+  function querySelectorAllCached(element, selector, lookup = null) {
+    if (!(element instanceof Element)) return [];
+    if (!lookup?.selectorResults) return Array.from(element.querySelectorAll(selector));
+
+    let selectorMap = lookup.selectorResults.get(element);
+    if (!selectorMap) {
+      selectorMap = new Map();
+      lookup.selectorResults.set(element, selectorMap);
+    }
+
+    if (!selectorMap.has(selector)) {
+      selectorMap.set(selector, Array.from(element.querySelectorAll(selector)));
+    }
+
+    return selectorMap.get(selector);
   }
 
   function buildImageCandidate(image) {
@@ -2458,13 +2636,17 @@
     );
   }
 
-  function findNestedImageAtPoint(element, clientX, clientY) {
+  function findNestedImageAtPoint(element, lookup) {
     if (!(element instanceof Element)) return null;
-    if (typeof clientX !== "number" || typeof clientY !== "number") return null;
+    if (typeof lookup.clientX !== "number" || typeof lookup.clientY !== "number") {
+      return null;
+    }
     if (!element.matches?.(NESTED_IMAGE_CONTAINER_SELECTOR)) return null;
 
-    for (const image of element.querySelectorAll("img")) {
-      if (pointWithinElement(image, clientX, clientY)) return image;
+    for (const image of querySelectorAllCached(element, "img", lookup)) {
+      if (pointWithinElement(image, lookup.clientX, lookup.clientY, lookup)) {
+        return image;
+      }
     }
 
     return null;
