@@ -84,6 +84,7 @@
     "data-lazy-srcset",
     "data-original-srcset",
   ];
+  const SVG_NS = "http://www.w3.org/2000/svg";
 
   const CONFIG = {
     minTargetPixels: 48,
@@ -114,6 +115,7 @@
     "image/jpeg": "jpeg",
     "image/jpg": "jpeg",
     "image/png": "png",
+    "image/svg+xml": "svg",
     "image/webp": "webp",
     "video/mp4": "mp4",
     "video/ogg": "ogv",
@@ -132,6 +134,7 @@
     "mp4",
     "ogv",
     "png",
+    "svg",
     "webm",
     "webp",
   ]);
@@ -155,6 +158,7 @@
       positionRaf: 0,
       lastEventTarget: null,
       fallbackUrl: "",
+      temporaryUrl: "",
       videoCurrentTime: 0,
       videoShouldPlay: false,
       live: null,
@@ -171,6 +175,9 @@
       resize: null,
       pointerListenersActive: false,
       toastTimer: 0,
+      temporaryUrl: "",
+      fallbackW: 0,
+      fallbackH: 0,
     },
     input: {
       suppressClick: false,
@@ -519,6 +526,10 @@
         object-fit: contain;
       }
 
+      #${IDS.hoverImg} {
+        object-fit: contain;
+      }
+
       #${IDS.hoverLiveHost} {
         overflow: hidden;
       }
@@ -815,7 +826,11 @@
   function activateHoverCandidateAtPoint(start, clientX, clientY, event = null) {
     const lookup = createMediaLookup(start, clientX, clientY, event);
     const candidate = findHoverCandidate(lookup);
-    if (!candidate || !isTargetLargeEnough(candidate.element, lookup)) {
+    if (
+      !candidate ||
+      (!candidate.allowSmallTarget && !isTargetLargeEnough(candidate.element, lookup))
+    ) {
+      revokeTemporaryUrl(candidate?.temporaryUrl || "");
       return false;
     }
 
@@ -1045,6 +1060,7 @@
     const previewMode = candidate.previewMode || "image";
     const candidateUrl = candidate.url || "";
     const fallbackUrl = candidate.fallbackUrl || "";
+    const temporaryUrl = candidate.temporaryUrl || "";
     const sameMedia = isSameHoverMedia(
       previewMode,
       candidateUrl,
@@ -1055,6 +1071,7 @@
     state.hover.url = candidateUrl;
     state.hover.previewMode = previewMode;
     state.hover.fallbackUrl = fallbackUrl;
+    replaceHoverTemporaryUrl(temporaryUrl);
     state.hover.videoCurrentTime = clamp(
       Number(candidate.currentTime) || 0,
       0,
@@ -1091,7 +1108,7 @@
         !state.hover.naturalW ||
         !state.hover.naturalH
       ) {
-        setHoverImageUrl(candidateUrl);
+        setHoverImageUrl(candidateUrl, candidate);
       } else {
         showHoverPreviewMode("image");
         clearHoverVideo();
@@ -1142,6 +1159,7 @@
     state.hover.url = "";
     state.hover.previewMode = "image";
     state.hover.fallbackUrl = "";
+    replaceHoverTemporaryUrl("");
     state.hover.videoCurrentTime = 0;
     state.hover.videoShouldPlay = false;
     state.hover.naturalW = 0;
@@ -1149,13 +1167,38 @@
     state.hover.lastEventTarget = null;
   }
 
+  function replaceHoverTemporaryUrl(url) {
+    if (state.hover.temporaryUrl && state.hover.temporaryUrl !== url) {
+      revokeTemporaryUrl(state.hover.temporaryUrl);
+    }
+
+    state.hover.temporaryUrl = url || "";
+  }
+
+  function replacePopoutTemporaryUrl(url) {
+    if (state.popout.temporaryUrl && state.popout.temporaryUrl !== url) {
+      revokeTemporaryUrl(state.popout.temporaryUrl);
+    }
+
+    state.popout.temporaryUrl = url || "";
+  }
+
+  function revokeTemporaryUrl(url) {
+    if (!url || !url.startsWith("blob:")) return;
+
+    try {
+      URL.revokeObjectURL(url);
+    } catch {}
+  }
+
   function isHoverVisible() {
     return state.ui.ready && state.ui.hoverWrap.style.display === "block";
   }
 
-  function setHoverImageUrl(url) {
+  function setHoverImageUrl(url, candidate = null) {
     const token = ++state.hover.loadToken;
     const img = state.ui.hoverImg;
+    const fallbackSize = getCandidateFallbackSize(candidate);
 
     showHoverPreviewMode("image");
     clearHoverVideo();
@@ -1166,8 +1209,9 @@
 
     img.onload = () => {
       if (token !== state.hover.loadToken) return;
-      state.hover.naturalW = img.naturalWidth || CONFIG.hover.fallbackWidth;
-      state.hover.naturalH = img.naturalHeight || CONFIG.hover.fallbackHeight;
+      const size = getLoadedImageSize(img, fallbackSize);
+      state.hover.naturalW = size.width;
+      state.hover.naturalH = size.height;
       applyHoverSize();
       if (isHoverVisible()) {
         updateHoverPosition(state.hover.mouseX, state.hover.mouseY);
@@ -1180,8 +1224,9 @@
     };
 
     if (img.src === url && img.complete && img.naturalWidth) {
-      state.hover.naturalW = img.naturalWidth;
-      state.hover.naturalH = img.naturalHeight || CONFIG.hover.fallbackHeight;
+      const size = getLoadedImageSize(img, fallbackSize);
+      state.hover.naturalW = size.width;
+      state.hover.naturalH = size.height;
       applyHoverSize();
       updateHoverPosition(state.hover.mouseX, state.hover.mouseY);
       return;
@@ -1481,7 +1526,13 @@
   }
 
   function openPopout(media) {
-    const { mediaUrl, mediaType } = getPopoutMediaDescriptor(media);
+    const {
+      mediaUrl,
+      mediaType,
+      fallbackW,
+      fallbackH,
+      temporaryUrl,
+    } = getPopoutMediaDescriptor(media);
 
     if (!mediaUrl) return;
     ensureUi();
@@ -1490,6 +1541,9 @@
     state.popout.url = mediaUrl;
     state.popout.mediaType = mediaType;
     state.popout.autoFit = true;
+    state.popout.fallbackW = fallbackW;
+    state.popout.fallbackH = fallbackH;
+    replacePopoutTemporaryUrl(temporaryUrl);
     state.ui.popoutTitle.textContent = mediaUrl;
     state.ui.overlay.classList.add("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
@@ -1522,8 +1576,12 @@
           : "";
     const mediaType =
       typeof media === "object" && media?.type === "video" ? "video" : "image";
+    const fallbackW = typeof media?.fallbackW === "number" ? media.fallbackW : 0;
+    const fallbackH = typeof media?.fallbackH === "number" ? media.fallbackH : 0;
+    const temporaryUrl =
+      typeof media?.temporaryUrl === "string" ? media.temporaryUrl : "";
 
-    return { mediaUrl, mediaType };
+    return { mediaUrl, mediaType, fallbackW, fallbackH, temporaryUrl };
   }
 
   function clearPopoutLoadHandlers() {
@@ -1606,6 +1664,9 @@
     state.ui.overlay.classList.remove("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
     document.documentElement.style.userSelect = "";
+    replacePopoutTemporaryUrl("");
+    state.popout.fallbackW = 0;
+    state.popout.fallbackH = 0;
   }
 
   function openPopoutUrlInNewTab() {
@@ -1962,13 +2023,15 @@
 
     const naturalW = Math.max(
       1,
-      isVideo ? media.videoWidth || maxWidth : media.naturalWidth || maxWidth,
+      isVideo
+        ? media.videoWidth || maxWidth
+        : media.naturalWidth || state.popout.fallbackW || maxWidth,
     );
     const naturalH = Math.max(
       1,
       isVideo
         ? media.videoHeight || maxBodyHeight
-        : media.naturalHeight || maxBodyHeight,
+        : media.naturalHeight || state.popout.fallbackH || maxBodyHeight,
     );
     const scale = Math.min(maxWidth / naturalW, maxBodyHeight / naturalH, 1);
 
@@ -2073,6 +2136,9 @@
         const candidate = buildImageCandidate(element);
         if (candidate) return candidate;
       }
+
+      const inlineSvgCandidate = buildInlineSvgCandidate(element, lookup);
+      if (inlineSvgCandidate) return inlineSvgCandidate;
     }
 
     for (const element of path) {
@@ -2084,17 +2150,23 @@
 
       if (element.matches?.("a[href]")) {
         const href = element.getAttribute("href") || "";
-        const linkedImageUrl = pickLinkedImageUrl(href);
-        if (linkedImageUrl) {
-          return { element, url: linkedImageUrl };
+        const linkedImageUrl = pickLinkedImageUrl(href, "", element);
+        const candidate = buildUrlImageCandidate(element, linkedImageUrl, {
+          lookup,
+          mimeType: element.getAttribute("type") || "",
+        });
+        if (candidate) {
+          candidate.allowSmallTarget = candidate.kind === "svg";
+          return candidate;
         }
       }
 
       if (element.matches?.(BACKGROUND_IMAGE_SELECTOR)) {
         const backgroundUrl = getBackgroundImageUrl(element);
-        if (backgroundUrl) {
-          return { element, url: backgroundUrl };
-        }
+        const candidate = buildUrlImageCandidate(element, backgroundUrl, {
+          lookup,
+        });
+        if (candidate) return candidate;
       }
     }
 
@@ -2190,8 +2262,12 @@
 
       const backgroundUrl = getBackgroundImageUrl(container);
       if (backgroundUrl) {
+        const candidate = buildUrlImageCandidate(container, backgroundUrl, {
+          lookup,
+        });
+        if (!candidate) continue;
         return withOnlyFansContainer(
-          { element: container, url: backgroundUrl },
+          candidate,
           container,
           forHover,
         );
@@ -2583,15 +2659,218 @@
     if (!(image instanceof HTMLImageElement)) return null;
 
     const imageUrl = pickBestImageUrl(image);
-    const linkedUrl = image.closest("a[href]")?.getAttribute("href") || "";
-    const linkedImageUrl = pickLinkedImageUrl(linkedUrl, imageUrl);
+    const link = image.closest("a[href]");
+    const linkedUrl = link?.getAttribute("href") || "";
+    const linkedImageUrl = pickLinkedImageUrl(linkedUrl, imageUrl, link);
     if (linkedImageUrl) {
-      return { element: image, url: linkedImageUrl };
+      return buildUrlImageCandidate(image, linkedImageUrl, {
+        mimeType: link?.getAttribute("type") || "",
+      });
     }
 
-    if (!imageUrl) return null;
+    return buildUrlImageCandidate(image, imageUrl);
+  }
 
-    return { element: image, url: imageUrl };
+  function buildUrlImageCandidate(element, url, options = {}) {
+    const resolvedUrl = resolveUrl(url || "");
+    if (!resolvedUrl) return null;
+
+    const kind = (
+      options.kind ||
+      (isSvgUrl(resolvedUrl, {
+        allowBlob: options.allowSvgBlob,
+        mimeType: options.mimeType,
+      }) ? "svg" : "")
+    );
+    const size = getElementFallbackSize(
+      options.svgElement || element,
+      options.lookup || null,
+      kind === "svg",
+    );
+    const candidate = { element, url: resolvedUrl };
+
+    if (kind) candidate.kind = kind;
+    if (options.temporaryUrl) candidate.temporaryUrl = options.temporaryUrl;
+    if (size) {
+      candidate.fallbackW = size.width;
+      candidate.fallbackH = size.height;
+    }
+
+    return candidate;
+  }
+
+  function buildInlineSvgCandidate(element, lookup) {
+    const svg = getInlineSvgElement(element);
+    if (!svg) return null;
+
+    const objectUrl = createInlineSvgObjectUrl(svg);
+    if (!objectUrl) return null;
+
+    return buildUrlImageCandidate(svg, objectUrl, {
+      allowSvgBlob: true,
+      kind: "svg",
+      lookup,
+      svgElement: svg,
+      temporaryUrl: objectUrl,
+    });
+  }
+
+  function getInlineSvgElement(element) {
+    if (!(element instanceof Element)) return null;
+
+    if (isInlineSvgRoot(element)) return element;
+
+    const owner = element.ownerSVGElement;
+    return isInlineSvgRoot(owner) ? owner : null;
+  }
+
+  function isInlineSvgRoot(element) {
+    return Boolean(
+      element instanceof Element &&
+      element.localName?.toLowerCase() === "svg" &&
+      element.namespaceURI === SVG_NS,
+    );
+  }
+
+  function createInlineSvgObjectUrl(svg) {
+    try {
+      const clone = svg.cloneNode(true);
+      if (!(clone instanceof Element)) return "";
+
+      if (!clone.getAttribute("xmlns")) {
+        clone.setAttribute("xmlns", SVG_NS);
+      }
+
+      const markup = new XMLSerializer().serializeToString(clone);
+      const blob = new Blob([markup], {
+        type: "image/svg+xml;charset=utf-8",
+      });
+      return URL.createObjectURL(blob);
+    } catch {
+      return "";
+    }
+  }
+
+  function getCandidateFallbackSize(candidate) {
+    if (!candidate) return null;
+
+    const width = Math.round(Number(candidate.fallbackW) || 0);
+    const height = Math.round(Number(candidate.fallbackH) || 0);
+    if (width > 0 && height > 0) {
+      return { width, height };
+    }
+
+    if (candidate.kind === "svg") {
+      return {
+        width: CONFIG.hover.fallbackWidth,
+        height: CONFIG.hover.fallbackWidth,
+      };
+    }
+
+    return null;
+  }
+
+  function getLoadedImageSize(img, fallbackSize = null) {
+    const naturalW = Math.round(img.naturalWidth || 0);
+    const naturalH = Math.round(img.naturalHeight || 0);
+    if (naturalW > 0 && naturalH > 0) {
+      return { width: naturalW, height: naturalH };
+    }
+
+    if (fallbackSize?.width && fallbackSize?.height) {
+      return fallbackSize;
+    }
+
+    return {
+      width: CONFIG.hover.fallbackWidth,
+      height: CONFIG.hover.fallbackHeight,
+    };
+  }
+
+  function getElementFallbackSize(element, lookup = null, preferSquare = false) {
+    const svgSize = getInlineSvgSize(element);
+    if (svgSize) return svgSize;
+
+    const imageSize = getImageAttributeSize(element);
+    if (imageSize) return imageSize;
+
+    const rect = getElementRect(element, lookup);
+    if (rect?.width > 0 && rect?.height > 0) {
+      return {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    }
+
+    if (preferSquare) {
+      return {
+        width: CONFIG.hover.fallbackWidth,
+        height: CONFIG.hover.fallbackWidth,
+      };
+    }
+
+    return null;
+  }
+
+  function getInlineSvgSize(element) {
+    if (!isInlineSvgRoot(element)) return null;
+
+    const attrW = parseSvgLength(element.getAttribute("width"));
+    const attrH = parseSvgLength(element.getAttribute("height"));
+    if (attrW > 0 && attrH > 0) {
+      return { width: attrW, height: attrH };
+    }
+
+    const viewBox = parseSvgViewBox(element.getAttribute("viewBox"));
+    if (viewBox) {
+      if (attrW > 0) {
+        return {
+          width: attrW,
+          height: Math.round(attrW * (viewBox.height / viewBox.width)),
+        };
+      }
+      if (attrH > 0) {
+        return {
+          width: Math.round(attrH * (viewBox.width / viewBox.height)),
+          height: attrH,
+        };
+      }
+      return { width: viewBox.width, height: viewBox.height };
+    }
+
+    return null;
+  }
+
+  function getImageAttributeSize(element) {
+    if (!(element instanceof HTMLImageElement)) return null;
+
+    const attrW = parseSvgLength(element.getAttribute("width"));
+    const attrH = parseSvgLength(element.getAttribute("height"));
+    if (attrW > 0 && attrH > 0) {
+      return { width: attrW, height: attrH };
+    }
+
+    return null;
+  }
+
+  function parseSvgLength(value) {
+    const match = String(value || "").trim().match(/^(\d+(?:\.\d+)?)(?:px)?$/i);
+    return match ? Math.round(Number(match[1]) || 0) : 0;
+  }
+
+  function parseSvgViewBox(value) {
+    const parts = String(value || "")
+      .trim()
+      .split(/[\s,]+/)
+      .map((part) => Number(part));
+
+    if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) {
+      return null;
+    }
+
+    const width = Math.round(parts[2]);
+    const height = Math.round(parts[3]);
+    return width > 0 && height > 0 ? { width, height } : null;
   }
 
   function buildHoverVideoCandidate(video) {
@@ -2829,14 +3108,32 @@
       const backgroundImage = getComputedStyle(element).backgroundImage;
       if (!backgroundImage || backgroundImage === "none") return "";
 
-      const match = backgroundImage.match(/url\(["']?(.*?)["']?\)/i);
-      return resolveUrl(match?.[1] || "");
+      const urls = extractCssUrls(backgroundImage);
+      return (
+        urls.find((url) => isSvgUrl(url)) ||
+        urls[0] ||
+        ""
+      );
     } catch {
       return "";
     }
   }
 
-  function pickLinkedImageUrl(url, fallbackUrl = "") {
+  function extractCssUrls(value) {
+    const urls = [];
+    const pattern = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi;
+    let match;
+
+    while ((match = pattern.exec(String(value || "")))) {
+      const rawUrl = match[1] || match[2] || match[3] || "";
+      const resolvedUrl = resolveUrl(rawUrl.trim());
+      if (resolvedUrl) urls.push(resolvedUrl);
+    }
+
+    return urls;
+  }
+
+  function pickLinkedImageUrl(url, fallbackUrl = "", link = null) {
     if (!url) return "";
 
     const mediaViewerUrl = pickWikimediaMediaViewerAssetUrl(url, "image");
@@ -2844,7 +3141,8 @@
       return fallbackUrl || mediaViewerUrl;
     }
 
-    if (!isLikelyImageUrl(url)) return "";
+    const svgMimeHint = isSvgMimeType(link?.getAttribute?.("type") || "");
+    if (!isLikelyImageUrl(url) && !svgMimeHint) return "";
 
     const resolvedUrl = resolveUrl(url);
     if (!resolvedUrl) return "";
@@ -2858,6 +3156,7 @@
 
   function isLikelyImageUrl(url) {
     if (!url) return false;
+    if (isSvgUrl(url)) return true;
     if (url.startsWith("data:image/")) return true;
 
     try {
@@ -2868,6 +3167,61 @@
     } catch {
       return false;
     }
+  }
+
+  function isSvgUrl(url, options = {}) {
+    if (!url) return false;
+
+    const value = String(url).trim();
+    if (isSvgMimeType(options.mimeType || "")) return true;
+    if (/^data:image\/svg\+xml(?:[;,]|$)/i.test(value)) return true;
+    if (options.allowBlob && value.startsWith("blob:")) return true;
+
+    try {
+      const parsed = new URL(value, window.location.href);
+      if (/\.svg$/i.test(parsed.pathname)) return true;
+      return hasSvgQueryHint(parsed);
+    } catch {
+      return /\.svg(?:[?#]|$)/i.test(value);
+    }
+  }
+
+  function hasSvgQueryHint(parsed) {
+    for (const key of [
+      "content-type",
+      "content_type",
+      "ext",
+      "extension",
+      "file",
+      "filename",
+      "format",
+      "mime",
+      "name",
+      "type",
+    ]) {
+      const value = parsed.searchParams.get(key);
+      if (isSvgHintValue(value)) return true;
+    }
+
+    return false;
+  }
+
+  function isSvgHintValue(value) {
+    const normalized = String(value || "")
+      .trim()
+      .toLowerCase();
+    return (
+      normalized === "svg" ||
+      normalized === "image/svg+xml" ||
+      normalized.endsWith(".svg")
+    );
+  }
+
+  function isSvgMimeType(value) {
+    return String(value || "")
+      .split(";", 1)[0]
+      .trim()
+      .toLowerCase() === "image/svg+xml";
   }
 
   function isWikimediaFilePageUrl(url) {
