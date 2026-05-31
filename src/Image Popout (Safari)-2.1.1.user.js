@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.1.1
+// @version      2.2.0
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -101,7 +101,7 @@
       viewportPadding: 8,
       borderRadius: 14,
       padding: 5,
-      borderWidth: 0.5,
+      borderWidth: 1,
       fallbackWidth: 800,
       fallbackHeight: 600,
     },
@@ -301,6 +301,23 @@
         --hz-accent: rgba(0, 122, 255, 0.88);
         --hz-danger: rgba(255, 59, 48, 0.18);
         --hz-danger-border: rgba(255, 59, 48, 0.3);
+        --hz-hover-glass-radius: ${CONFIG.hover.borderRadius}px;
+        --hz-hover-glass-media-radius: ${CONFIG.hover.borderRadius - 6}px;
+        --hz-hover-glass-border-width: ${CONFIG.hover.borderWidth}px;
+        --hz-hover-glass-blur: 10px;
+        --hz-hover-glass-saturation: 145%;
+        --hz-hover-glass-bg: rgba(246, 248, 252, 0.46);
+        --hz-hover-glass-border: rgba(255, 255, 255, 0.68);
+        --hz-hover-glass-edge-contrast: rgba(16, 20, 28, 0.16);
+        --hz-hover-glass-top-sheen: rgba(255, 255, 255, 0.42);
+        --hz-hover-glass-side-sheen: rgba(255, 255, 255, 0.18);
+        --hz-hover-glass-bottom-tint: rgba(12, 16, 24, 0.08);
+        --hz-hover-glass-inner-rim: rgba(255, 255, 255, 0.36);
+        --hz-hover-glass-content-rim: rgba(18, 22, 30, 0.12);
+        --hz-hover-glass-shadow:
+          0 0 0 0.5px var(--hz-hover-glass-edge-contrast),
+          0 10px 28px rgba(12, 16, 24, 0.14),
+          0 2px 8px rgba(12, 16, 24, 0.1);
       }
 
       @media (prefers-color-scheme: dark) {
@@ -320,6 +337,18 @@
           --hz-accent: rgba(10, 132, 255, 0.9);
           --hz-danger: rgba(255, 69, 58, 0.22);
           --hz-danger-border: rgba(255, 69, 58, 0.34);
+          --hz-hover-glass-bg: rgba(28, 30, 36, 0.46);
+          --hz-hover-glass-border: rgba(255, 255, 255, 0.24);
+          --hz-hover-glass-edge-contrast: rgba(255, 255, 255, 0.1);
+          --hz-hover-glass-top-sheen: rgba(255, 255, 255, 0.18);
+          --hz-hover-glass-side-sheen: rgba(255, 255, 255, 0.1);
+          --hz-hover-glass-bottom-tint: rgba(0, 0, 0, 0.16);
+          --hz-hover-glass-inner-rim: rgba(255, 255, 255, 0.14);
+          --hz-hover-glass-content-rim: rgba(255, 255, 255, 0.1);
+          --hz-hover-glass-shadow:
+            0 0 0 0.5px var(--hz-hover-glass-edge-contrast),
+            0 12px 32px rgba(0, 0, 0, 0.4),
+            0 2px 8px rgba(0, 0, 0, 0.28);
         }
       }
 
@@ -492,14 +521,53 @@
         display: none;
         pointer-events: none;
         padding: ${CONFIG.hover.padding}px;
-        border-radius: ${CONFIG.hover.borderRadius}px;
-        border: ${CONFIG.hover.borderWidth}px solid var(--hz-border);
-        background: var(--hz-surface-soft);
-        box-shadow: var(--hz-shadow);
-        backdrop-filter: blur(14px) saturate(150%);
-        -webkit-backdrop-filter: blur(14px) saturate(150%);
+        overflow: hidden;
+        isolation: isolate;
+        border-radius: var(--hz-hover-glass-radius);
+        border: var(--hz-hover-glass-border-width) solid var(--hz-hover-glass-border);
+        background:
+          linear-gradient(
+            180deg,
+            var(--hz-hover-glass-top-sheen),
+            transparent 34%,
+            var(--hz-hover-glass-bottom-tint)
+          ),
+          var(--hz-hover-glass-bg);
+        background-clip: padding-box;
+        box-shadow: var(--hz-hover-glass-shadow);
+        backdrop-filter:
+          blur(var(--hz-hover-glass-blur))
+          saturate(var(--hz-hover-glass-saturation));
+        -webkit-backdrop-filter:
+          blur(var(--hz-hover-glass-blur))
+          saturate(var(--hz-hover-glass-saturation));
         transform: translate3d(-9999px, -9999px, 0);
         will-change: transform;
+      }
+
+      #${IDS.hoverWrap}::before,
+      #${IDS.hoverWrap}::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+      }
+
+      #${IDS.hoverWrap}::before {
+        z-index: 2;
+        box-shadow:
+          inset 0 1px 0 var(--hz-hover-glass-top-sheen),
+          inset 1px 0 0 var(--hz-hover-glass-side-sheen),
+          inset -1px 0 0 rgba(255, 255, 255, 0.06),
+          inset 0 -1px 0 var(--hz-hover-glass-bottom-tint);
+      }
+
+      #${IDS.hoverWrap}::after {
+        inset: 1px;
+        z-index: 2;
+        border-radius: calc(var(--hz-hover-glass-radius) - 1px);
+        box-shadow: inset 0 0 0 1px var(--hz-hover-glass-inner-rim);
       }
 
       #${IDS.hoverWrap}.is-interactive {
@@ -512,9 +580,11 @@
         display: block;
         max-width: none;
         max-height: none;
-        border-radius: ${CONFIG.hover.borderRadius - 6}px;
+        position: relative;
+        z-index: 1;
+        border-radius: var(--hz-hover-glass-media-radius);
         background: var(--hz-image-bg);
-        box-shadow: inset 0 0 0 1px var(--hz-border-soft);
+        box-shadow: inset 0 0 0 1px var(--hz-hover-glass-content-rim);
       }
 
       #${IDS.hoverVideo},
@@ -546,6 +616,7 @@
         color: var(--hz-text);
         font: 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         letter-spacing: 0.06em;
+        z-index: 3;
       }
 
       #${IDS.hoverToast} {
