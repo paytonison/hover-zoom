@@ -301,6 +301,47 @@
         --hz-accent: rgba(0, 122, 255, 0.88);
         --hz-danger: rgba(255, 59, 48, 0.18);
         --hz-danger-border: rgba(255, 59, 48, 0.3);
+        --hz-glass-radius: 18px;
+        --hz-glass-inner-radius: 13px;
+        --hz-glass-blur: 18px;
+        --hz-glass-saturation: 165%;
+        --hz-glass-brightness: 1.06;
+        --hz-glass-bg:
+          radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.72), transparent 34%),
+          linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.58),
+            rgba(246, 248, 252, 0.34) 42%,
+            rgba(232, 238, 248, 0.42)
+          );
+        --hz-glass-bg-solid: rgba(248, 250, 255, 0.92);
+        --hz-glass-body-bg: rgba(0, 0, 0, 0.12);
+        --hz-glass-border: rgba(255, 255, 255, 0.72);
+        --hz-glass-divider: rgba(18, 22, 30, 0.1);
+        --hz-glass-highlight: rgba(255, 255, 255, 0.52);
+        --hz-glass-rim: rgba(255, 255, 255, 0.38);
+        --hz-glass-edge: rgba(16, 20, 28, 0.14);
+        --hz-glass-shadow:
+          0 0 0 0.5px var(--hz-glass-edge),
+          0 24px 70px rgba(8, 12, 20, 0.22),
+          0 8px 24px rgba(8, 12, 20, 0.12),
+          inset 0 1px 0 rgba(255, 255, 255, 0.58);
+        --hz-titlebar-glass-bg:
+          linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.72),
+            rgba(255, 255, 255, 0.42)
+          );
+        --hz-control-bg: rgba(255, 255, 255, 0.48);
+        --hz-control-bg-hover: rgba(255, 255, 255, 0.68);
+        --hz-control-bg-active: rgba(255, 255, 255, 0.36);
+        --hz-control-border: rgba(255, 255, 255, 0.62);
+        --hz-control-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.46),
+          0 1px 2px rgba(12, 16, 24, 0.12);
+        --hz-toast-glass-bg: rgba(255, 255, 255, 0.78);
+        --hz-resize-mark: rgba(255, 255, 255, 0.78);
+        --hz-title-text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
         --hz-hover-glass-radius: ${CONFIG.hover.borderRadius}px;
         --hz-hover-glass-media-radius: ${CONFIG.hover.borderRadius - 6}px;
         --hz-hover-glass-border-width: ${CONFIG.hover.borderWidth}px;
@@ -337,6 +378,43 @@
           --hz-accent: rgba(10, 132, 255, 0.9);
           --hz-danger: rgba(255, 69, 58, 0.22);
           --hz-danger-border: rgba(255, 69, 58, 0.34);
+          --hz-glass-brightness: 0.94;
+          --hz-glass-bg:
+            radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.18), transparent 36%),
+            linear-gradient(
+              145deg,
+              rgba(44, 46, 56, 0.58),
+              rgba(24, 26, 34, 0.46) 44%,
+              rgba(10, 12, 18, 0.52)
+            );
+          --hz-glass-bg-solid: rgba(24, 26, 32, 0.94);
+          --hz-glass-body-bg: rgba(0, 0, 0, 0.42);
+          --hz-glass-border: rgba(255, 255, 255, 0.24);
+          --hz-glass-divider: rgba(255, 255, 255, 0.09);
+          --hz-glass-highlight: rgba(255, 255, 255, 0.18);
+          --hz-glass-rim: rgba(255, 255, 255, 0.12);
+          --hz-glass-edge: rgba(255, 255, 255, 0.1);
+          --hz-glass-shadow:
+            0 0 0 0.5px var(--hz-glass-edge),
+            0 30px 78px rgba(0, 0, 0, 0.56),
+            0 8px 26px rgba(0, 0, 0, 0.34),
+            inset 0 1px 0 rgba(255, 255, 255, 0.18);
+          --hz-titlebar-glass-bg:
+            linear-gradient(
+              180deg,
+              rgba(52, 54, 64, 0.68),
+              rgba(22, 24, 30, 0.5)
+            );
+          --hz-control-bg: rgba(255, 255, 255, 0.1);
+          --hz-control-bg-hover: rgba(255, 255, 255, 0.17);
+          --hz-control-bg-active: rgba(255, 255, 255, 0.08);
+          --hz-control-border: rgba(255, 255, 255, 0.18);
+          --hz-control-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.14),
+            0 1px 2px rgba(0, 0, 0, 0.28);
+          --hz-toast-glass-bg: rgba(30, 32, 38, 0.82);
+          --hz-resize-mark: rgba(255, 255, 255, 0.46);
+          --hz-title-text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
           --hz-hover-glass-bg: rgba(28, 30, 36, 0.46);
           --hz-hover-glass-border: rgba(255, 255, 255, 0.24);
           --hz-hover-glass-edge-contrast: rgba(255, 255, 255, 0.1);
@@ -368,34 +446,73 @@
       #${IDS.backdrop} {
         position: absolute;
         inset: 0;
-        background: var(--hz-backdrop);
+        background:
+          radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.1), transparent 36%),
+          var(--hz-backdrop);
         backdrop-filter: blur(14px) saturate(140%);
         -webkit-backdrop-filter: blur(14px) saturate(140%);
       }
 
+      /* Liquid Glass popout surface */
       #${IDS.window} {
         position: absolute;
         overflow: hidden;
-        border-radius: 16px;
-        border: 1px solid var(--hz-border);
-        background: var(--hz-surface);
-        box-shadow: var(--hz-shadow);
-        backdrop-filter: blur(12px) saturate(150%);
-        -webkit-backdrop-filter: blur(12px) saturate(150%);
+        isolation: isolate;
+        border-radius: var(--hz-glass-radius);
+        border: 1px solid var(--hz-glass-border);
+        background: var(--hz-glass-bg);
+        box-shadow: var(--hz-glass-shadow);
+        backdrop-filter:
+          blur(var(--hz-glass-blur))
+          saturate(var(--hz-glass-saturation))
+          brightness(var(--hz-glass-brightness));
+        -webkit-backdrop-filter:
+          blur(var(--hz-glass-blur))
+          saturate(var(--hz-glass-saturation))
+          brightness(var(--hz-glass-brightness));
+      }
+
+      #${IDS.window}::before,
+      #${IDS.window}::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        pointer-events: none;
+      }
+
+      #${IDS.window}::before {
+        z-index: 4;
+        box-shadow:
+          inset 0 1px 0 var(--hz-glass-highlight),
+          inset 1px 0 0 rgba(255, 255, 255, 0.14),
+          inset -1px 0 0 rgba(255, 255, 255, 0.08),
+          inset 0 -1px 0 rgba(0, 0, 0, 0.08);
+      }
+
+      #${IDS.window}::after {
+        z-index: 1;
+        background:
+          linear-gradient(115deg, var(--hz-glass-highlight), transparent 28%),
+          radial-gradient(circle at 78% 4%, var(--hz-glass-rim), transparent 22%);
+        opacity: 0.62;
       }
 
       #${IDS.titlebar} {
+        position: relative;
+        z-index: 3;
         height: ${CONFIG.popout.titlebarHeight}px;
         display: flex;
         align-items: center;
         gap: 8px;
         padding: 0 12px;
-        border-bottom: 1px solid var(--hz-border-soft);
-        background: linear-gradient(
-          180deg,
-          var(--hz-surface-strong),
-          var(--hz-surface)
-        );
+        border-bottom: 1px solid var(--hz-glass-divider);
+        background: var(--hz-titlebar-glass-bg);
+        box-shadow:
+          inset 0 1px 0 var(--hz-glass-highlight),
+          inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(10px) saturate(150%);
+        -webkit-backdrop-filter: blur(10px) saturate(150%);
         cursor: move;
         user-select: none;
       }
@@ -407,21 +524,40 @@
         text-overflow: ellipsis;
         white-space: nowrap;
         font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-shadow: var(--hz-title-text-shadow);
       }
 
       .hz-btn {
         appearance: none;
-        border: 1px solid var(--hz-border);
-        background: var(--hz-surface-soft);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 28px;
+        border: 1px solid var(--hz-control-border);
+        background: var(--hz-control-bg);
         color: var(--hz-text);
-        border-radius: 9px;
+        border-radius: 999px;
         padding: 6px 10px;
         font: 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        box-shadow: var(--hz-control-shadow);
+        backdrop-filter: blur(10px) saturate(150%);
+        -webkit-backdrop-filter: blur(10px) saturate(150%);
         cursor: pointer;
+        transition:
+          background-color 120ms ease,
+          border-color 120ms ease,
+          box-shadow 120ms ease,
+          transform 120ms ease;
       }
 
       .hz-btn:hover {
-        background: var(--hz-surface-strong);
+        background: var(--hz-control-bg-hover);
+        border-color: var(--hz-glass-border);
+      }
+
+      .hz-btn:active {
+        background: var(--hz-control-bg-active);
+        transform: translateY(1px);
       }
 
       .hz-btn:focus-visible {
@@ -443,9 +579,14 @@
       }
 
       #hz-body {
+        position: relative;
+        z-index: 2;
         width: 100%;
         height: calc(100% - ${CONFIG.popout.titlebarHeight}px);
-        background: var(--hz-image-bg);
+        overflow: hidden;
+        border-radius: 0 0 var(--hz-glass-inner-radius) var(--hz-glass-inner-radius);
+        background: var(--hz-glass-body-bg);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
       }
 
       #${IDS.popoutImg},
@@ -453,7 +594,8 @@
         width: 100%;
         height: 100%;
         object-fit: contain;
-        background: var(--hz-image-bg);
+        border-radius: inherit;
+        background: var(--hz-glass-body-bg);
       }
 
       #${IDS.popoutImg} {
@@ -471,11 +613,12 @@
         width: 18px;
         height: 18px;
         cursor: nwse-resize;
-        opacity: 0.55;
+        opacity: 0.7;
+        z-index: 5;
         background:
-          linear-gradient(135deg, transparent 50%, rgba(255, 255, 255, 0.65) 50%),
-          linear-gradient(135deg, transparent 68%, rgba(255, 255, 255, 0.55) 68%),
-          linear-gradient(135deg, transparent 84%, rgba(255, 255, 255, 0.45) 84%);
+          linear-gradient(135deg, transparent 50%, var(--hz-resize-mark) 50%),
+          linear-gradient(135deg, transparent 68%, var(--hz-resize-mark) 68%),
+          linear-gradient(135deg, transparent 84%, var(--hz-resize-mark) 84%);
       }
 
       #${IDS.popoutToast},
@@ -484,11 +627,11 @@
         z-index: 2147483647;
         padding: 8px 10px;
         border-radius: 12px;
-        border: 1px solid var(--hz-border);
-        background: var(--hz-surface-strong);
+        border: 1px solid var(--hz-glass-border);
+        background: var(--hz-toast-glass-bg);
         color: var(--hz-text);
         font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        box-shadow: var(--hz-shadow);
+        box-shadow: var(--hz-glass-shadow);
         backdrop-filter: blur(12px) saturate(150%);
         -webkit-backdrop-filter: blur(12px) saturate(150%);
         opacity: 0;
@@ -622,6 +765,74 @@
       #${IDS.hoverToast} {
         left: 14px;
         bottom: 14px;
+      }
+
+      @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+        #${IDS.backdrop},
+        #${IDS.window},
+        #${IDS.titlebar},
+        .hz-btn,
+        #${IDS.popoutToast},
+        #${IDS.hoverToast},
+        #${IDS.hoverWrap} {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
+        #${IDS.backdrop} {
+          background: var(--hz-backdrop);
+        }
+
+        #${IDS.window} {
+          background: var(--hz-glass-bg-solid);
+        }
+      }
+
+      @media (prefers-reduced-transparency: reduce) {
+        :root {
+          --hz-backdrop: rgba(248, 250, 255, 0.82);
+          --hz-glass-blur: 0px;
+          --hz-glass-bg: var(--hz-glass-bg-solid);
+          --hz-glass-body-bg: rgba(0, 0, 0, 0.08);
+          --hz-hover-glass-blur: 0px;
+          --hz-hover-glass-bg: rgba(248, 250, 255, 0.94);
+          --hz-toast-glass-bg: var(--hz-glass-bg-solid);
+        }
+
+        #${IDS.backdrop},
+        #${IDS.window},
+        #${IDS.titlebar},
+        .hz-btn,
+        #${IDS.popoutToast},
+        #${IDS.hoverToast},
+        #${IDS.hoverWrap} {
+          backdrop-filter: none;
+          -webkit-backdrop-filter: none;
+        }
+
+        #${IDS.window}::after {
+          opacity: 0.18;
+        }
+      }
+
+      @media (prefers-color-scheme: dark) and (prefers-reduced-transparency: reduce) {
+        :root {
+          --hz-backdrop: rgba(5, 5, 8, 0.72);
+          --hz-glass-body-bg: rgba(0, 0, 0, 0.48);
+          --hz-hover-glass-bg: rgba(26, 28, 34, 0.94);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .hz-btn,
+        #${IDS.popoutToast},
+        #${IDS.hoverToast} {
+          transition: none;
+        }
+
+        .hz-btn:active {
+          transform: none;
+        }
       }
     `;
 
