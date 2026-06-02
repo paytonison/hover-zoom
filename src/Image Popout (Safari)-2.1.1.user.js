@@ -316,8 +316,8 @@
         --hz-hover-glass-content-rim: rgba(18, 22, 30, 0.12);
         --hz-hover-glass-shadow:
           0 0 0 0.5px var(--hz-hover-glass-edge-contrast),
-          0 10px 28px rgba(12, 16, 24, 0.14),
-          0 2px 8px rgba(12, 16, 24, 0.1);
+          0 10px 14px rgba(12, 16, 24, 0.14),
+          0 2px 4px rgba(12, 16, 24, 0.1);
       }
 
       @media (prefers-color-scheme: dark) {
@@ -347,8 +347,8 @@
           --hz-hover-glass-content-rim: rgba(255, 255, 255, 0.1);
           --hz-hover-glass-shadow:
             0 0 0 0.5px var(--hz-hover-glass-edge-contrast),
-            0 12px 32px rgba(0, 0, 0, 0.4),
-            0 2px 8px rgba(0, 0, 0, 0.28);
+            0 12px 16px rgba(0, 0, 0, 0.4),
+            0 2px 4px rgba(0, 0, 0, 0.28);
         }
       }
 
