@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.2.0
+// @version      2.2.1
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -345,20 +345,22 @@
         --hz-hover-glass-radius: ${CONFIG.hover.borderRadius}px;
         --hz-hover-glass-media-radius: ${CONFIG.hover.borderRadius - 6}px;
         --hz-hover-glass-border-width: ${CONFIG.hover.borderWidth}px;
+        --hoverZoomBorderOpacity: 0.25;
+        --hoverZoomBorderBlur: 10px;
         --hz-hover-glass-blur: 10px;
         --hz-hover-glass-saturation: 145%;
         --hz-hover-glass-bg: rgba(246, 248, 252, 0.46);
-        --hz-hover-glass-border: rgba(255, 255, 255, 0.68);
-        --hz-hover-glass-edge-contrast: rgba(16, 20, 28, 0.16);
-        --hz-hover-glass-top-sheen: rgba(255, 255, 255, 0.42);
-        --hz-hover-glass-side-sheen: rgba(255, 255, 255, 0.18);
-        --hz-hover-glass-bottom-tint: rgba(12, 16, 24, 0.08);
-        --hz-hover-glass-inner-rim: rgba(255, 255, 255, 0.36);
+        --hz-hover-glass-border: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+        --hz-hover-glass-edge-contrast: rgba(16, 20, 28, var(--hoverZoomBorderOpacity));
+        --hz-hover-glass-top-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+        --hz-hover-glass-side-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+        --hz-hover-glass-bottom-tint: rgba(12, 16, 24, var(--hoverZoomBorderOpacity));
+        --hz-hover-glass-inner-rim: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
         --hz-hover-glass-content-rim: rgba(18, 22, 30, 0.12);
         --hz-hover-glass-shadow:
-          0 0 0 0.5px var(--hz-hover-glass-edge-contrast),
-          0 10px 14px rgba(12, 16, 24, 0.14),
-          0 2px 4px rgba(12, 16, 24, 0.1);
+          0 0 var(--hoverZoomBorderBlur) var(--hz-hover-glass-edge-contrast),
+          0 10px var(--hoverZoomBorderBlur) rgba(12, 16, 24, var(--hoverZoomBorderOpacity)),
+          0 2px var(--hoverZoomBorderBlur) rgba(12, 16, 24, var(--hoverZoomBorderOpacity));
       }
 
       @media (prefers-color-scheme: dark) {
@@ -416,17 +418,17 @@
           --hz-resize-mark: rgba(255, 255, 255, 0.46);
           --hz-title-text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
           --hz-hover-glass-bg: rgba(28, 30, 36, 0.46);
-          --hz-hover-glass-border: rgba(255, 255, 255, 0.24);
-          --hz-hover-glass-edge-contrast: rgba(255, 255, 255, 0.1);
-          --hz-hover-glass-top-sheen: rgba(255, 255, 255, 0.18);
-          --hz-hover-glass-side-sheen: rgba(255, 255, 255, 0.1);
-          --hz-hover-glass-bottom-tint: rgba(0, 0, 0, 0.16);
-          --hz-hover-glass-inner-rim: rgba(255, 255, 255, 0.14);
+          --hz-hover-glass-border: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+          --hz-hover-glass-edge-contrast: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+          --hz-hover-glass-top-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+          --hz-hover-glass-side-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+          --hz-hover-glass-bottom-tint: rgba(0, 0, 0, var(--hoverZoomBorderOpacity));
+          --hz-hover-glass-inner-rim: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
           --hz-hover-glass-content-rim: rgba(255, 255, 255, 0.1);
           --hz-hover-glass-shadow:
-            0 0 0 0.5px var(--hz-hover-glass-edge-contrast),
-            0 12px 16px rgba(0, 0, 0, 0.4),
-            0 2px 4px rgba(0, 0, 0, 0.28);
+            0 0 var(--hoverZoomBorderBlur) var(--hz-hover-glass-edge-contrast),
+            0 12px var(--hoverZoomBorderBlur) rgba(0, 0, 0, var(--hoverZoomBorderOpacity)),
+            0 2px var(--hoverZoomBorderBlur) rgba(0, 0, 0, var(--hoverZoomBorderOpacity));
         }
       }
 
@@ -702,7 +704,7 @@
         box-shadow:
           inset 0 1px 0 var(--hz-hover-glass-top-sheen),
           inset 1px 0 0 var(--hz-hover-glass-side-sheen),
-          inset -1px 0 0 rgba(255, 255, 255, 0.06),
+          inset -1px 0 0 var(--hz-hover-glass-side-sheen),
           inset 0 -1px 0 var(--hz-hover-glass-bottom-tint);
       }
 
