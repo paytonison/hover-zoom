@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.2.1
+// @version      2.2.2
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -101,7 +101,7 @@
       viewportPadding: 8,
       borderRadius: 14,
       padding: 5,
-      borderWidth: 1,
+      borderWidth: 1.5,
       fallbackWidth: 800,
       fallbackHeight: 600,
     },
@@ -306,6 +306,7 @@
         --hz-glass-blur: 18px;
         --hz-glass-saturation: 165%;
         --hz-glass-brightness: 1.06;
+        --hz-glass-border-width: 1.5px;
         --hz-glass-bg:
           radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.72), transparent 34%),
           linear-gradient(
@@ -316,11 +317,11 @@
           );
         --hz-glass-bg-solid: rgba(248, 250, 255, 0.92);
         --hz-glass-body-bg: rgba(0, 0, 0, 0.12);
-        --hz-glass-border: rgba(255, 255, 255, 0.72);
+        --hz-glass-border: rgba(255, 255, 255, 0.46);
         --hz-glass-divider: rgba(18, 22, 30, 0.1);
-        --hz-glass-highlight: rgba(255, 255, 255, 0.52);
-        --hz-glass-rim: rgba(255, 255, 255, 0.38);
-        --hz-glass-edge: rgba(16, 20, 28, 0.14);
+        --hz-glass-highlight: rgba(255, 255, 255, 0.48);
+        --hz-glass-rim: rgba(255, 255, 255, 0.32);
+        --hz-glass-edge: rgba(16, 20, 28, 0.1);
         --hz-glass-shadow:
           0 0 0 0.5px var(--hz-glass-edge),
           0 24px 70px rgba(8, 12, 20, 0.22),
@@ -345,11 +346,11 @@
         --hz-hover-glass-radius: ${CONFIG.hover.borderRadius}px;
         --hz-hover-glass-media-radius: ${CONFIG.hover.borderRadius - 6}px;
         --hz-hover-glass-border-width: ${CONFIG.hover.borderWidth}px;
-        --hoverZoomBorderOpacity: 0.25;
+        --hoverZoomBorderOpacity: 0.2;
         --hoverZoomBorderBlur: 10px;
-        --hz-hover-glass-blur: 10px;
-        --hz-hover-glass-saturation: 145%;
-        --hz-hover-glass-bg: rgba(246, 248, 252, 0.46);
+        --hz-hover-glass-blur: 12px;
+        --hz-hover-glass-saturation: 150%;
+        --hz-hover-glass-bg: rgba(246, 248, 252, 0.42);
         --hz-hover-glass-border: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
         --hz-hover-glass-edge-contrast: rgba(16, 20, 28, var(--hoverZoomBorderOpacity));
         --hz-hover-glass-top-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
@@ -391,11 +392,11 @@
             );
           --hz-glass-bg-solid: rgba(24, 26, 32, 0.94);
           --hz-glass-body-bg: rgba(0, 0, 0, 0.42);
-          --hz-glass-border: rgba(255, 255, 255, 0.24);
+          --hz-glass-border: rgba(255, 255, 255, 0.18);
           --hz-glass-divider: rgba(255, 255, 255, 0.09);
-          --hz-glass-highlight: rgba(255, 255, 255, 0.18);
-          --hz-glass-rim: rgba(255, 255, 255, 0.12);
-          --hz-glass-edge: rgba(255, 255, 255, 0.1);
+          --hz-glass-highlight: rgba(255, 255, 255, 0.16);
+          --hz-glass-rim: rgba(255, 255, 255, 0.1);
+          --hz-glass-edge: rgba(255, 255, 255, 0.08);
           --hz-glass-shadow:
             0 0 0 0.5px var(--hz-glass-edge),
             0 30px 78px rgba(0, 0, 0, 0.56),
@@ -417,7 +418,7 @@
           --hz-toast-glass-bg: rgba(30, 32, 38, 0.82);
           --hz-resize-mark: rgba(255, 255, 255, 0.46);
           --hz-title-text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
-          --hz-hover-glass-bg: rgba(28, 30, 36, 0.46);
+          --hz-hover-glass-bg: rgba(28, 30, 36, 0.42);
           --hz-hover-glass-border: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
           --hz-hover-glass-edge-contrast: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
           --hz-hover-glass-top-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
@@ -461,8 +462,9 @@
         overflow: hidden;
         isolation: isolate;
         border-radius: var(--hz-glass-radius);
-        border: 1px solid var(--hz-glass-border);
+        border: var(--hz-glass-border-width) solid var(--hz-glass-border);
         background: var(--hz-glass-bg);
+        background-clip: padding-box;
         box-shadow: var(--hz-glass-shadow);
         backdrop-filter:
           blur(var(--hz-glass-blur))
