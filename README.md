@@ -7,7 +7,7 @@ media in a draggable, resizable in-page popout.
 
 ## Repository contents
 
-- `src/Image Popout (Safari)-2.2.2.user.js`: the userscript to install.
+- `src/Image Popout (Safari)-2.3.1.user.js`: the userscript to install.
 - `README.md`: this usage and development guide.
 
 There is no build step, package manifest, lint command, or automated test suite.
