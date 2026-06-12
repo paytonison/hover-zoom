@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.2.2
+// @version      2.3.0
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -99,9 +99,9 @@
       offset: 16,
       maxViewportFraction: 1,
       viewportPadding: 8,
-      borderRadius: 14,
+      borderRadius: 24,
       padding: 5,
-      borderWidth: 1.5,
+      borderWidth: 2.25,
       fallbackWidth: 800,
       fallbackHeight: 600,
     },
@@ -346,22 +346,32 @@
         --hz-hover-glass-radius: ${CONFIG.hover.borderRadius}px;
         --hz-hover-glass-media-radius: ${CONFIG.hover.borderRadius - 6}px;
         --hz-hover-glass-border-width: ${CONFIG.hover.borderWidth}px;
-        --hoverZoomBorderOpacity: 0.2;
-        --hoverZoomBorderBlur: 10px;
-        --hz-hover-glass-blur: 12px;
-        --hz-hover-glass-saturation: 150%;
-        --hz-hover-glass-bg: rgba(246, 248, 252, 0.42);
+        --hz-hover-glass-rim-width: ${CONFIG.hover.padding + CONFIG.hover.borderWidth}px;
+        --hoverZoomBorderOpacity: 0.56;
+        --hoverZoomBorderBlur: 18px;
+        --hz-hover-glass-blur: 1.5px;
+        --hz-hover-glass-saturation: 112%;
+        --hz-hover-glass-bg:
+          radial-gradient(ellipse at 18% 6%, rgba(255, 255, 255, 0.3), transparent 38%),
+          linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.13),
+            rgba(255, 255, 255, 0.045) 42%,
+            rgba(58, 78, 116, 0.06)
+          );
         --hz-hover-glass-border: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
-        --hz-hover-glass-edge-contrast: rgba(16, 20, 28, var(--hoverZoomBorderOpacity));
-        --hz-hover-glass-top-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
-        --hz-hover-glass-side-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
-        --hz-hover-glass-bottom-tint: rgba(12, 16, 24, var(--hoverZoomBorderOpacity));
-        --hz-hover-glass-inner-rim: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+        --hz-hover-glass-edge-contrast: rgba(8, 12, 20, 0.24);
+        --hz-hover-glass-top-sheen: rgba(255, 255, 255, 0.78);
+        --hz-hover-glass-side-sheen: rgba(255, 255, 255, 0.34);
+        --hz-hover-glass-bottom-tint: rgba(6, 10, 18, 0.3);
+        --hz-hover-glass-inner-rim: rgba(255, 255, 255, 0.46);
         --hz-hover-glass-content-rim: rgba(18, 22, 30, 0.12);
         --hz-hover-glass-shadow:
-          0 0 var(--hoverZoomBorderBlur) var(--hz-hover-glass-edge-contrast),
-          0 10px var(--hoverZoomBorderBlur) rgba(12, 16, 24, var(--hoverZoomBorderOpacity)),
-          0 2px var(--hoverZoomBorderBlur) rgba(12, 16, 24, var(--hoverZoomBorderOpacity));
+          0 0 0 0.5px rgba(255, 255, 255, 0.32),
+          0 18px 44px rgba(8, 12, 20, 0.34),
+          0 5px var(--hoverZoomBorderBlur) rgba(8, 12, 20, 0.22),
+          inset 0 1px 0 rgba(255, 255, 255, 0.58),
+          inset 0 -1px 0 var(--hz-hover-glass-bottom-tint);
       }
 
       @media (prefers-color-scheme: dark) {
@@ -418,18 +428,28 @@
           --hz-toast-glass-bg: rgba(30, 32, 38, 0.82);
           --hz-resize-mark: rgba(255, 255, 255, 0.46);
           --hz-title-text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
-          --hz-hover-glass-bg: rgba(28, 30, 36, 0.42);
+          --hoverZoomBorderOpacity: 0.34;
+          --hz-hover-glass-bg:
+            radial-gradient(ellipse at 18% 6%, rgba(255, 255, 255, 0.2), transparent 40%),
+            linear-gradient(
+              145deg,
+              rgba(255, 255, 255, 0.1),
+              rgba(255, 255, 255, 0.035) 44%,
+              rgba(0, 0, 0, 0.16)
+            );
           --hz-hover-glass-border: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
-          --hz-hover-glass-edge-contrast: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
-          --hz-hover-glass-top-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
-          --hz-hover-glass-side-sheen: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
-          --hz-hover-glass-bottom-tint: rgba(0, 0, 0, var(--hoverZoomBorderOpacity));
-          --hz-hover-glass-inner-rim: rgba(255, 255, 255, var(--hoverZoomBorderOpacity));
+          --hz-hover-glass-edge-contrast: rgba(0, 0, 0, 0.42);
+          --hz-hover-glass-top-sheen: rgba(255, 255, 255, 0.62);
+          --hz-hover-glass-side-sheen: rgba(255, 255, 255, 0.22);
+          --hz-hover-glass-bottom-tint: rgba(0, 0, 0, 0.38);
+          --hz-hover-glass-inner-rim: rgba(255, 255, 255, 0.34);
           --hz-hover-glass-content-rim: rgba(255, 255, 255, 0.1);
           --hz-hover-glass-shadow:
-            0 0 var(--hoverZoomBorderBlur) var(--hz-hover-glass-edge-contrast),
-            0 12px var(--hoverZoomBorderBlur) rgba(0, 0, 0, var(--hoverZoomBorderOpacity)),
-            0 2px var(--hoverZoomBorderBlur) rgba(0, 0, 0, var(--hoverZoomBorderOpacity));
+            0 0 0 0.5px rgba(255, 255, 255, 0.18),
+            0 20px 48px rgba(0, 0, 0, 0.52),
+            0 5px var(--hoverZoomBorderBlur) rgba(0, 0, 0, 0.34),
+            inset 0 1px 0 rgba(255, 255, 255, 0.32),
+            inset 0 -1px 0 var(--hz-hover-glass-bottom-tint);
         }
       }
 
@@ -673,12 +693,8 @@
         border-radius: var(--hz-hover-glass-radius);
         border: var(--hz-hover-glass-border-width) solid var(--hz-hover-glass-border);
         background:
-          linear-gradient(
-            180deg,
-            var(--hz-hover-glass-top-sheen),
-            transparent 34%,
-            var(--hz-hover-glass-bottom-tint)
-          ),
+          linear-gradient(150deg, rgba(255, 255, 255, 0.12), transparent 36%),
+          linear-gradient(330deg, var(--hz-hover-glass-bottom-tint), transparent 34%),
           var(--hz-hover-glass-bg);
         background-clip: padding-box;
         box-shadow: var(--hz-hover-glass-shadow);
@@ -703,18 +719,53 @@
 
       #${IDS.hoverWrap}::before {
         z-index: 2;
+        box-sizing: border-box;
+        padding: var(--hz-hover-glass-rim-width);
+        background:
+          radial-gradient(ellipse at 12% 4%, rgba(255, 255, 255, 0.86), transparent 34%),
+          linear-gradient(
+            135deg,
+            var(--hz-hover-glass-top-sheen) 0%,
+            rgba(255, 255, 255, 0.22) 20%,
+            rgba(255, 255, 255, 0.04) 45%,
+            var(--hz-hover-glass-bottom-tint) 78%,
+            rgba(255, 255, 255, 0.2) 100%
+          );
         box-shadow:
           inset 0 1px 0 var(--hz-hover-glass-top-sheen),
           inset 1px 0 0 var(--hz-hover-glass-side-sheen),
-          inset -1px 0 0 var(--hz-hover-glass-side-sheen),
+          inset -1px 0 0 rgba(0, 0, 0, 0.12),
           inset 0 -1px 0 var(--hz-hover-glass-bottom-tint);
+        -webkit-mask:
+          linear-gradient(#000 0 0) content-box,
+          linear-gradient(#000 0 0);
+        -webkit-mask-composite: xor;
+        mask:
+          linear-gradient(#000 0 0) content-box,
+          linear-gradient(#000 0 0);
+        mask-composite: exclude;
       }
 
       #${IDS.hoverWrap}::after {
         inset: 1px;
         z-index: 2;
         border-radius: calc(var(--hz-hover-glass-radius) - 1px);
-        box-shadow: inset 0 0 0 1px var(--hz-hover-glass-inner-rim);
+        background:
+          linear-gradient(
+            116deg,
+            transparent 0%,
+            transparent 15%,
+            rgba(255, 255, 255, 0.28) 22%,
+            rgba(255, 255, 255, 0.08) 34%,
+            transparent 48%
+          ),
+          radial-gradient(ellipse at 28% -12%, rgba(255, 255, 255, 0.28), transparent 42%);
+        box-shadow:
+          inset 0 0 0 1px var(--hz-hover-glass-inner-rim),
+          inset 0 0 18px rgba(255, 255, 255, 0.09),
+          inset 0 -12px 22px rgba(0, 0, 0, 0.14);
+        mix-blend-mode: screen;
+        opacity: 0.78;
       }
 
       #${IDS.hoverWrap}.is-interactive {
