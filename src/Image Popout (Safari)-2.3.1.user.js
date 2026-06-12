@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Image Popout (Safari)
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.3.0
+// @version      2.3.1
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -779,7 +779,7 @@
         max-width: none;
         max-height: none;
         position: relative;
-        z-index: 1;
+        z-index: 3;
         border-radius: var(--hz-hover-glass-media-radius);
         background: var(--hz-image-bg);
         box-shadow: inset 0 0 0 1px var(--hz-hover-glass-content-rim);
@@ -814,7 +814,7 @@
         color: var(--hz-text);
         font: 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
         letter-spacing: 0.06em;
-        z-index: 3;
+        z-index: 4;
       }
 
       #${IDS.hoverToast} {
