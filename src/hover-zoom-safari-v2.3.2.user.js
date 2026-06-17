@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Popout (Safari)
+// @name         hover-zoom-safari
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.3.1
+// @version      2.3.2
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -1341,7 +1341,15 @@
     if (!state.hover.pinned) hideHover();
   }
 
-  function onDocumentMouseLeave() {
+  function onDocumentMouseLeave(event) {
+    // Safari sends descendant mouseleave events through the capture phase.
+    if (
+      event.target !== document &&
+      event.target !== document.documentElement
+    ) {
+      return;
+    }
+
     if (!state.hover.pinned) hideHover();
   }
 
@@ -1423,14 +1431,14 @@
     updateHoverInteractivity();
 
     if (previewMode === "live") {
+      state.hover.loadToken += 1;
+      clearHoverImageLoadHandlers();
       setHoverTarget(attachHoverLiveElement(candidate));
     } else if (previewMode === "video") {
       setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
       if (
         sameMedia &&
-        state.ui.hoverVideo.src === candidateUrl &&
-        state.hover.naturalW &&
-        state.hover.naturalH
+        state.ui.hoverVideo.src === candidateUrl
       ) {
         showHoverPreviewMode("video");
         applyHoverSize();
@@ -1441,9 +1449,7 @@
       setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
       if (
         !sameMedia ||
-        state.ui.hoverImg.src !== candidateUrl ||
-        !state.hover.naturalW ||
-        !state.hover.naturalH
+        state.ui.hoverImg.src !== candidateUrl
       ) {
         setHoverImageUrl(candidateUrl, candidate);
       } else {
@@ -1491,6 +1497,7 @@
   }
 
   function resetHoverCandidateState() {
+    state.hover.loadToken += 1;
     state.hover.target = null;
     state.hover.targetRect = null;
     state.hover.url = "";
@@ -1530,6 +1537,12 @@
 
   function isHoverVisible() {
     return state.ui.ready && state.ui.hoverWrap.style.display === "block";
+  }
+
+  function clearHoverImageLoadHandlers() {
+    if (!state.ui.hoverImg) return;
+    state.ui.hoverImg.onload = null;
+    state.ui.hoverImg.onerror = null;
   }
 
   function setHoverImageUrl(url, candidate = null) {
@@ -1735,11 +1748,17 @@
       hadControlsAttribute,
     } = live;
 
-    if (placeholder?.parentNode) {
-      placeholder.parentNode.insertBefore(element, placeholder);
+    const placeholderParent = placeholder?.parentNode;
+    if (placeholderParent) {
+      placeholderParent.insertBefore(element, placeholder);
       placeholder.remove();
-    } else if (originalParent?.isConnected) {
-      originalParent.insertBefore(element, originalNextSibling || null);
+    } else if (originalParent instanceof Node) {
+      const reference = (
+        originalNextSibling?.parentNode === originalParent
+          ? originalNextSibling
+          : null
+      );
+      originalParent.insertBefore(element, reference);
     }
 
     if (typeof originalStyle === "string" && originalStyle) {
@@ -1996,12 +2015,17 @@
   function closePopout() {
     if (!state.popout.open) return;
     state.popout.open = false;
+    state.popout.loadToken += 1;
+    clearPopoutLoadHandlers();
     stopPopoutPointerInteraction();
-    state.ui.popoutVideo.pause();
+    clearVideoSource(state.ui.popoutVideo);
+    state.ui.popoutImg.removeAttribute("src");
     state.ui.overlay.classList.remove("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
     document.documentElement.style.userSelect = "";
     replacePopoutTemporaryUrl("");
+    state.popout.url = "";
+    state.popout.mediaType = "image";
     state.popout.fallbackW = 0;
     state.popout.fallbackH = 0;
   }
@@ -2293,6 +2317,7 @@
     state.popout.pointerListenersActive = true;
     window.addEventListener("pointermove", onWindowPointerMove, true);
     window.addEventListener("pointerup", onWindowPointerUp, true);
+    window.addEventListener("pointercancel", onWindowPointerUp, true);
   }
 
   function removeActivePointerListeners() {
@@ -2301,6 +2326,7 @@
     state.popout.pointerListenersActive = false;
     window.removeEventListener("pointermove", onWindowPointerMove, true);
     window.removeEventListener("pointerup", onWindowPointerUp, true);
+    window.removeEventListener("pointercancel", onWindowPointerUp, true);
   }
 
   function stopPopoutPointerInteraction() {
