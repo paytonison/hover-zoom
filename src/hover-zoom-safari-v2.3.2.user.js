@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Image Popout (Safari)
+// @name         hover-zoom-safari
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.3.1
+// @version      2.3.2
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -1491,6 +1491,7 @@
   }
 
   function resetHoverCandidateState() {
+    state.hover.loadToken += 1;
     state.hover.target = null;
     state.hover.targetRect = null;
     state.hover.url = "";
@@ -1996,12 +1997,17 @@
   function closePopout() {
     if (!state.popout.open) return;
     state.popout.open = false;
+    state.popout.loadToken += 1;
+    clearPopoutLoadHandlers();
     stopPopoutPointerInteraction();
-    state.ui.popoutVideo.pause();
+    clearVideoSource(state.ui.popoutVideo);
+    state.ui.popoutImg.removeAttribute("src");
     state.ui.overlay.classList.remove("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
     document.documentElement.style.userSelect = "";
     replacePopoutTemporaryUrl("");
+    state.popout.url = "";
+    state.popout.mediaType = "image";
     state.popout.fallbackW = 0;
     state.popout.fallbackH = 0;
   }
@@ -2293,6 +2299,7 @@
     state.popout.pointerListenersActive = true;
     window.addEventListener("pointermove", onWindowPointerMove, true);
     window.addEventListener("pointerup", onWindowPointerUp, true);
+    window.addEventListener("pointercancel", onWindowPointerUp, true);
   }
 
   function removeActivePointerListeners() {
@@ -2301,6 +2308,7 @@
     state.popout.pointerListenersActive = false;
     window.removeEventListener("pointermove", onWindowPointerMove, true);
     window.removeEventListener("pointerup", onWindowPointerUp, true);
+    window.removeEventListener("pointercancel", onWindowPointerUp, true);
   }
 
   function stopPopoutPointerInteraction() {
