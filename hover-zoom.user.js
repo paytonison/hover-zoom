@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         hover-zoom-safari
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      2.3.2
+// @version      3.0.0
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -1019,7 +1019,9 @@
     document.addEventListener("click", onDocumentClick, true);
     document.addEventListener("contextmenu", onDocumentContextMenu, true);
     window.addEventListener("keydown", onWindowKeyDown, true);
-    window.addEventListener("resize", scheduleViewportChange, { passive: true });
+    window.addEventListener("resize", scheduleViewportChange, {
+      passive: true,
+    });
     window.addEventListener("scroll", scheduleViewportChange, {
       capture: true,
       passive: true,
@@ -1097,10 +1099,8 @@
   }
 
   function shouldSuppressDocumentClick() {
-    const suppressClick = (
-      state.input.suppressClick ||
-      state.input.suppressClickUntil > Date.now()
-    );
+    const suppressClick =
+      state.input.suppressClick || state.input.suppressClickUntil > Date.now();
 
     state.input.suppressClick = false;
     state.input.suppressClickUntil = 0;
@@ -1141,9 +1141,7 @@
 
     if (!state.hover.target) return;
 
-    if (
-      !pointWithinHoverTarget(event.clientX, event.clientY)
-    ) {
+    if (!pointWithinHoverTarget(event.clientX, event.clientY)) {
       if (
         !activateHoverCandidateAtPoint(
           event.target,
@@ -1160,12 +1158,18 @@
     updateHoverPosition(event.clientX, event.clientY);
   }
 
-  function activateHoverCandidateAtPoint(start, clientX, clientY, event = null) {
+  function activateHoverCandidateAtPoint(
+    start,
+    clientX,
+    clientY,
+    event = null,
+  ) {
     const lookup = createMediaLookup(start, clientX, clientY, event);
     const candidate = findHoverCandidate(lookup);
     if (
       !candidate ||
-      (!candidate.allowSmallTarget && !isTargetLargeEnough(candidate.element, lookup))
+      (!candidate.allowSmallTarget &&
+        !isTargetLargeEnough(candidate.element, lookup))
     ) {
       revokeTemporaryUrl(candidate?.temporaryUrl || "");
       return false;
@@ -1230,12 +1234,11 @@
 
     if (state.popout.drag && event.pointerId === state.popout.drag.pointerId) {
       event.preventDefault();
-      const nextLeft = state.popout.drag.startLeft + (
-        event.clientX - state.popout.drag.startX
-      );
-      const nextTop = state.popout.drag.startTop + (
-        event.clientY - state.popout.drag.startY
-      );
+      const nextLeft =
+        state.popout.drag.startLeft +
+        (event.clientX - state.popout.drag.startX);
+      const nextTop =
+        state.popout.drag.startTop + (event.clientY - state.popout.drag.startY);
       const position = clampPopoutPosition(
         nextLeft,
         nextTop,
@@ -1263,16 +1266,14 @@
       );
 
       const nextWidth = clamp(
-        state.popout.resize.startWidth + (
-          event.clientX - state.popout.resize.startX
-        ),
+        state.popout.resize.startWidth +
+          (event.clientX - state.popout.resize.startX),
         CONFIG.popout.minWidth,
         maxWidth,
       );
       const nextHeight = clamp(
-        state.popout.resize.startHeight + (
-          event.clientY - state.popout.resize.startY
-        ),
+        state.popout.resize.startHeight +
+          (event.clientY - state.popout.resize.startY),
         CONFIG.popout.minHeight,
         maxHeight,
       );
@@ -1436,10 +1437,7 @@
       setHoverTarget(attachHoverLiveElement(candidate));
     } else if (previewMode === "video") {
       setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
-      if (
-        sameMedia &&
-        state.ui.hoverVideo.src === candidateUrl
-      ) {
+      if (sameMedia && state.ui.hoverVideo.src === candidateUrl) {
         showHoverPreviewMode("video");
         applyHoverSize();
       } else {
@@ -1447,10 +1445,7 @@
       }
     } else {
       setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
-      if (
-        !sameMedia ||
-        state.ui.hoverImg.src !== candidateUrl
-      ) {
+      if (!sameMedia || state.ui.hoverImg.src !== candidateUrl) {
         setHoverImageUrl(candidateUrl, candidate);
       } else {
         showHoverPreviewMode("image");
@@ -1672,9 +1667,8 @@
       const originalParent = liveElement.parentNode;
       const originalNextSibling = liveElement.nextSibling;
       const originalStyle = liveElement.getAttribute("style");
-      const originalControls = (
-        liveElement instanceof HTMLVideoElement ? liveElement.controls : null
-      );
+      const originalControls =
+        liveElement instanceof HTMLVideoElement ? liveElement.controls : null;
       const hadControlsAttribute = liveElement.hasAttribute("controls");
 
       if (!(originalParent instanceof Node)) {
@@ -1714,16 +1708,10 @@
       };
 
       if (liveElement instanceof HTMLVideoElement) {
-        state.hover.naturalW = (
-          liveElement.videoWidth ||
-          rect.width ||
-          CONFIG.hover.fallbackWidth
-        );
-        state.hover.naturalH = (
-          liveElement.videoHeight ||
-          rect.height ||
-          CONFIG.hover.fallbackHeight
-        );
+        state.hover.naturalW =
+          liveElement.videoWidth || rect.width || CONFIG.hover.fallbackWidth;
+        state.hover.naturalH =
+          liveElement.videoHeight || rect.height || CONFIG.hover.fallbackHeight;
       } else {
         state.hover.naturalW = rect.width || CONFIG.hover.fallbackWidth;
         state.hover.naturalH = rect.height || CONFIG.hover.fallbackHeight;
@@ -1731,7 +1719,11 @@
     }
 
     applyHoverSize();
-    return state.hover.live?.placeholder || candidate.hoverTarget || candidate.element;
+    return (
+      state.hover.live?.placeholder ||
+      candidate.hoverTarget ||
+      candidate.element
+    );
   }
 
   function teardownHoverLiveElement() {
@@ -1753,11 +1745,10 @@
       placeholderParent.insertBefore(element, placeholder);
       placeholder.remove();
     } else if (originalParent instanceof Node) {
-      const reference = (
+      const reference =
         originalNextSibling?.parentNode === originalParent
           ? originalNextSibling
-          : null
-      );
+          : null;
       originalParent.insertBefore(element, reference);
     }
 
@@ -1790,10 +1781,8 @@
   }
 
   function updateHoverInteractivity() {
-    state.hover.interactive = (
-      state.hover.pinned &&
-      state.hover.previewMode !== "image"
-    );
+    state.hover.interactive =
+      state.hover.pinned && state.hover.previewMode !== "image";
     state.ui.hoverWrap.classList.toggle(
       "is-interactive",
       state.hover.interactive,
@@ -1812,7 +1801,7 @@
     state.ui.hoverLiveHost.style.width = `${size.width}px`;
     state.ui.hoverLiveHost.style.height = `${size.height}px`;
 
-    const chrome = (CONFIG.hover.padding * 2) + (CONFIG.hover.borderWidth * 2);
+    const chrome = CONFIG.hover.padding * 2 + CONFIG.hover.borderWidth * 2;
     state.hover.wrapW = size.width + chrome;
     state.hover.wrapH = size.height + chrome;
   }
@@ -1821,13 +1810,13 @@
     const { width: vw, height: vh } = getViewport();
     const maxWrapW = Math.min(
       vw * CONFIG.hover.maxViewportFraction,
-      vw - (CONFIG.hover.viewportPadding * 2),
+      vw - CONFIG.hover.viewportPadding * 2,
     );
     const maxWrapH = Math.min(
       vh * CONFIG.hover.maxViewportFraction,
-      vh - (CONFIG.hover.viewportPadding * 2),
+      vh - CONFIG.hover.viewportPadding * 2,
     );
-    const chrome = (CONFIG.hover.padding * 2) + (CONFIG.hover.borderWidth * 2);
+    const chrome = CONFIG.hover.padding * 2 + CONFIG.hover.borderWidth * 2;
     const maxImgW = Math.max(40, Math.floor(maxWrapW - chrome));
     const maxImgH = Math.max(40, Math.floor(maxWrapH - chrome));
 
@@ -1876,19 +1865,12 @@
     left = clamp(left, pad, Math.max(pad, vw - width - pad));
     top = clamp(top, pad, Math.max(pad, vh - height - pad));
 
-    state.ui.hoverWrap.style.transform = (
-      `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`
-    );
+    state.ui.hoverWrap.style.transform = `translate3d(${Math.round(left)}px, ${Math.round(top)}px, 0)`;
   }
 
   function openPopout(media) {
-    const {
-      mediaUrl,
-      mediaType,
-      fallbackW,
-      fallbackH,
-      temporaryUrl,
-    } = getPopoutMediaDescriptor(media);
+    const { mediaUrl, mediaType, fallbackW, fallbackH, temporaryUrl } =
+      getPopoutMediaDescriptor(media);
 
     if (!mediaUrl) return;
     ensureUi();
@@ -1932,8 +1914,10 @@
           : "";
     const mediaType =
       typeof media === "object" && media?.type === "video" ? "video" : "image";
-    const fallbackW = typeof media?.fallbackW === "number" ? media.fallbackW : 0;
-    const fallbackH = typeof media?.fallbackH === "number" ? media.fallbackH : 0;
+    const fallbackW =
+      typeof media?.fallbackW === "number" ? media.fallbackW : 0;
+    const fallbackH =
+      typeof media?.fallbackH === "number" ? media.fallbackH : 0;
     const temporaryUrl =
       typeof media?.temporaryUrl === "string" ? media.temporaryUrl : "";
 
@@ -2071,7 +2055,9 @@
   function getCurrentPopoutMediaUrl() {
     if (!state.popout.open || !state.popout.url) return "";
     if (state.popout.mediaType === "video") {
-      return pickBestVideoUrl(state.ui.popoutVideo) || resolveUrl(state.popout.url);
+      return (
+        pickBestVideoUrl(state.ui.popoutVideo) || resolveUrl(state.popout.url)
+      );
     }
     return resolveUrl(state.popout.url);
   }
@@ -2087,7 +2073,9 @@
 
     try {
       const parsed = new URL(url, window.location.href);
-      const pathExtMatch = parsed.pathname.toLowerCase().match(/\.([a-z0-9]{2,5})$/);
+      const pathExtMatch = parsed.pathname
+        .toLowerCase()
+        .match(/\.([a-z0-9]{2,5})$/);
       if (pathExtMatch) {
         const ext = pathExtMatch[1];
         if (KNOWN_EXTENSIONS.has(ext)) return ext === "jpg" ? "jpeg" : ext;
@@ -2223,22 +2211,12 @@
 
   function showHoverToast(message) {
     ensureUi();
-    showToast(
-      state.ui.hoverToast,
-      "hover",
-      message,
-      900,
-    );
+    showToast(state.ui.hoverToast, "hover", message, 900);
   }
 
   function showPopoutToast(message) {
     ensureUi();
-    showToast(
-      state.ui.popoutToast,
-      "popout",
-      message,
-      1200,
-    );
+    showToast(state.ui.popoutToast, "popout", message, 1200);
   }
 
   function showToast(element, type, message, duration) {
@@ -2401,17 +2379,17 @@
     const width = clamp(
       Math.floor(naturalW * scale),
       CONFIG.popout.minWidth,
-      vw - (pad * 2),
+      vw - pad * 2,
     );
     const bodyHeight = clamp(
       Math.floor(naturalH * scale),
       80,
-      vh - (pad * 2) - CONFIG.popout.titlebarHeight,
+      vh - pad * 2 - CONFIG.popout.titlebarHeight,
     );
     const height = clamp(
       bodyHeight + CONFIG.popout.titlebarHeight,
       CONFIG.popout.minHeight,
-      vh - (pad * 2),
+      vh - pad * 2,
     );
 
     const left = Math.round((vw - width) / 2);
@@ -2426,12 +2404,12 @@
     const width = clamp(
       Math.floor(vw * 0.68),
       CONFIG.popout.minWidth,
-      vw - (pad * 2),
+      vw - pad * 2,
     );
     const height = clamp(
       Math.floor(vh * 0.68),
       CONFIG.popout.minHeight,
-      vh - (pad * 2),
+      vh - pad * 2,
     );
 
     return {
@@ -2452,10 +2430,14 @@
     const popoutWindow = state.ui.popoutWindow;
     if (!popoutWindow) return;
 
-    if (typeof left === "number") popoutWindow.style.left = `${Math.round(left)}px`;
-    if (typeof top === "number") popoutWindow.style.top = `${Math.round(top)}px`;
-    if (typeof width === "number") popoutWindow.style.width = `${Math.round(width)}px`;
-    if (typeof height === "number") popoutWindow.style.height = `${Math.round(height)}px`;
+    if (typeof left === "number")
+      popoutWindow.style.left = `${Math.round(left)}px`;
+    if (typeof top === "number")
+      popoutWindow.style.top = `${Math.round(top)}px`;
+    if (typeof width === "number")
+      popoutWindow.style.width = `${Math.round(width)}px`;
+    if (typeof height === "number")
+      popoutWindow.style.height = `${Math.round(height)}px`;
   }
 
   function clampPopoutToViewport() {
@@ -2464,8 +2446,8 @@
 
     const { width: vw, height: vh } = getViewport();
     const padding = CONFIG.viewportPadding;
-    const width = clamp(rect.width, 1, vw - (padding * 2));
-    const height = clamp(rect.height, 1, vh - (padding * 2));
+    const width = clamp(rect.width, 1, vw - padding * 2);
+    const height = clamp(rect.height, 1, vh - padding * 2);
     const position = clampPopoutPosition(rect.left, rect.top, width, height);
 
     setPopoutRect(position.left, position.top, width, height);
@@ -2474,8 +2456,8 @@
   function clampPopoutPosition(left, top, width, height) {
     const { width: vw, height: vh } = getViewport();
     const padding = CONFIG.viewportPadding;
-    const clampedWidth = clamp(width, 1, vw - (padding * 2));
-    const clampedHeight = clamp(height, 1, vh - (padding * 2));
+    const clampedWidth = clamp(width, 1, vw - padding * 2);
+    const clampedHeight = clamp(height, 1, vh - padding * 2);
 
     return {
       left: clamp(
@@ -2483,11 +2465,7 @@
         padding,
         Math.max(padding, vw - clampedWidth - padding),
       ),
-      top: clamp(
-        top,
-        padding,
-        Math.max(padding, vh - clampedHeight - padding),
-      ),
+      top: clamp(top, padding, Math.max(padding, vh - clampedHeight - padding)),
     };
   }
 
@@ -2575,10 +2553,7 @@
 
   function findSiteMediaCandidate(lookup, forHover) {
     if (isOnlyFansHost()) {
-      const onlyFansCandidate = findOnlyFansMediaCandidate(
-        lookup,
-        forHover,
-      );
+      const onlyFansCandidate = findOnlyFansMediaCandidate(lookup, forHover);
       if (onlyFansCandidate) return onlyFansCandidate;
     }
 
@@ -2597,11 +2572,7 @@
     const containers = collectOnlyFansMediaContainers(lookup);
 
     for (const container of containers) {
-      const video = findBestNestedMediaElement(
-        container,
-        "video",
-        lookup,
-      );
+      const video = findBestNestedMediaElement(container, "video", lookup);
       if (video instanceof HTMLVideoElement) {
         const candidate = forHover
           ? buildHoverVideoCandidate(video)
@@ -2611,11 +2582,7 @@
         }
       }
 
-      const image = findBestNestedMediaElement(
-        container,
-        "img",
-        lookup,
-      );
+      const image = findBestNestedMediaElement(container, "img", lookup);
       if (image instanceof HTMLImageElement) {
         const candidate = buildImageCandidate(image);
         if (candidate) {
@@ -2629,11 +2596,7 @@
           lookup,
         });
         if (!candidate) continue;
-        return withOnlyFansContainer(
-          candidate,
-          container,
-          forHover,
-        );
+        return withOnlyFansContainer(candidate, container, forHover);
       }
     }
 
@@ -2683,18 +2646,25 @@
 
   function shouldSearchOnlyFansContainer(element, lookup) {
     if (!(element instanceof Element)) return false;
-    if (element === document.documentElement || element === document.body) return false;
+    if (element === document.documentElement || element === document.body)
+      return false;
 
     const rect = getElementRect(element, lookup);
     if (!rect) return false;
     if (!pointWithinRect(rect, lookup.clientX, lookup.clientY)) return false;
-    if (rect.width < CONFIG.minTargetPixels || rect.height < CONFIG.minTargetPixels) {
+    if (
+      rect.width < CONFIG.minTargetPixels ||
+      rect.height < CONFIG.minTargetPixels
+    ) {
       return false;
     }
 
     const { width: vw, height: vh } = getViewport();
     const tooLargeToBeMedia = rect.width > vw * 1.25 || rect.height > vh * 1.75;
-    if (tooLargeToBeMedia && !element.matches?.(ONLYFANS_MEDIA_CONTAINER_SELECTOR)) {
+    if (
+      tooLargeToBeMedia &&
+      !element.matches?.(ONLYFANS_MEDIA_CONTAINER_SELECTOR)
+    ) {
       return false;
     }
 
@@ -2710,7 +2680,8 @@
     const push = (element) => {
       if (!(element instanceof Element)) return;
       const rect = getVisibleMediaRect(element, lookup);
-      if (!rect || !pointWithinRect(rect, lookup.clientX, lookup.clientY)) return;
+      if (!rect || !pointWithinRect(rect, lookup.clientX, lookup.clientY))
+        return;
 
       const area = getRectArea(rect);
       if (area > bestArea) {
@@ -2847,10 +2818,9 @@
     if (!element.matches?.("a[href]")) return null;
 
     const href = element.getAttribute("href") || "";
-    const videoUrl = (
+    const videoUrl =
       pickWikimediaMediaViewerAssetUrl(href, "video") ||
-      (isLikelyVideoUrl(href) ? resolveUrl(href) : "")
-    );
+      (isLikelyVideoUrl(href) ? resolveUrl(href) : "");
     if (!videoUrl) return null;
 
     if (!forHover) {
@@ -2906,7 +2876,11 @@
     const seen = new Set();
 
     for (const baseElement of getElementsAtPoint(lookup)) {
-      for (let element = baseElement; element; element = element.parentElement) {
+      for (
+        let element = baseElement;
+        element;
+        element = element.parentElement
+      ) {
         if (seen.has(element)) break;
         seen.add(element);
         path.push(element);
@@ -2940,7 +2914,10 @@
   }
 
   function pointWithinHoverTarget(x, y) {
-    if (!(state.hover.target instanceof Element) || !state.hover.target.isConnected) {
+    if (
+      !(state.hover.target instanceof Element) ||
+      !state.hover.target.isConnected
+    ) {
       return false;
     }
 
@@ -2982,7 +2959,9 @@
   }
 
   function pointWithinRect(rect, x, y) {
-    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+    return (
+      x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+    );
   }
 
   function getElementRect(element, lookup = null) {
@@ -3003,7 +2982,8 @@
 
   function querySelectorAllCached(element, selector, lookup = null) {
     if (!(element instanceof Element)) return [];
-    if (!lookup?.selectorResults) return Array.from(element.querySelectorAll(selector));
+    if (!lookup?.selectorResults)
+      return Array.from(element.querySelectorAll(selector));
 
     let selectorMap = lookup.selectorResults.get(element);
     if (!selectorMap) {
@@ -3038,13 +3018,14 @@
     const resolvedUrl = resolveUrl(url || "");
     if (!resolvedUrl) return null;
 
-    const kind = (
+    const kind =
       options.kind ||
       (isSvgUrl(resolvedUrl, {
         allowBlob: options.allowSvgBlob,
         mimeType: options.mimeType,
-      }) ? "svg" : "")
-    );
+      })
+        ? "svg"
+        : "");
     const size = getElementFallbackSize(
       options.svgElement || element,
       options.lookup || null,
@@ -3090,8 +3071,8 @@
   function isInlineSvgRoot(element) {
     return Boolean(
       element instanceof Element &&
-      element.localName?.toLowerCase() === "svg" &&
-      element.namespaceURI === SVG_NS,
+        element.localName?.toLowerCase() === "svg" &&
+        element.namespaceURI === SVG_NS,
     );
   }
 
@@ -3150,7 +3131,11 @@
     };
   }
 
-  function getElementFallbackSize(element, lookup = null, preferSquare = false) {
+  function getElementFallbackSize(
+    element,
+    lookup = null,
+    preferSquare = false,
+  ) {
     const svgSize = getInlineSvgSize(element);
     if (svgSize) return svgSize;
 
@@ -3217,7 +3202,9 @@
   }
 
   function parseSvgLength(value) {
-    const match = String(value || "").trim().match(/^(\d+(?:\.\d+)?)(?:px)?$/i);
+    const match = String(value || "")
+      .trim()
+      .match(/^(\d+(?:\.\d+)?)(?:px)?$/i);
     return match ? Math.round(Number(match[1]) || 0) : 0;
   }
 
@@ -3241,7 +3228,9 @@
 
     const videoUrl = pickBestVideoUrl(video);
     const fallbackUrl = pickVideoPreviewUrl(video);
-    const currentTime = Number.isFinite(video.currentTime) ? video.currentTime : 0;
+    const currentTime = Number.isFinite(video.currentTime)
+      ? video.currentTime
+      : 0;
     const shouldPlay = !video.paused && !video.ended;
 
     if (isReplayableHoverVideoUrl(videoUrl)) {
@@ -3272,15 +3261,16 @@
 
   function isReplayableHoverVideoUrl(url) {
     return Boolean(
-      url &&
-      !url.startsWith("blob:") &&
-      !url.startsWith("mediasource:"),
+      url && !url.startsWith("blob:") && !url.startsWith("mediasource:"),
     );
   }
 
   function findNestedImageAtPoint(element, lookup) {
     if (!(element instanceof Element)) return null;
-    if (typeof lookup.clientX !== "number" || typeof lookup.clientY !== "number") {
+    if (
+      typeof lookup.clientX !== "number" ||
+      typeof lookup.clientY !== "number"
+    ) {
       return null;
     }
     if (!element.matches?.(NESTED_IMAGE_CONTAINER_SELECTOR)) return null;
@@ -3295,7 +3285,9 @@
   }
 
   function pickBestImageUrl(image) {
-    const srcsetUrl = pickBestSrcsetUrl(image.getAttribute("srcset") || image.srcset || "");
+    const srcsetUrl = pickBestSrcsetUrl(
+      image.getAttribute("srcset") || image.srcset || "",
+    );
     if (srcsetUrl) return srcsetUrl;
 
     const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
@@ -3373,7 +3365,9 @@
   function pickVideoPreviewUrl(video) {
     if (!(video instanceof HTMLVideoElement)) return "";
 
-    const posterUrl = resolveUrl(video.getAttribute("poster") || video.poster || "");
+    const posterUrl = resolveUrl(
+      video.getAttribute("poster") || video.poster || "",
+    );
     if (posterUrl) return posterUrl;
 
     const cachedFrameUrl = VIDEO_PREVIEW_CACHE.get(video);
@@ -3412,7 +3406,9 @@
 
   function extractQualityScore(value) {
     if (!value) return 0;
-    const match = String(value).toLowerCase().match(/(\d{3,4})\s*p?/);
+    const match = String(value)
+      .toLowerCase()
+      .match(/(\d{3,4})\s*p?/);
     return match ? Number(match[1]) || 0 : 0;
   }
 
@@ -3472,11 +3468,7 @@
       if (!backgroundImage || backgroundImage === "none") return "";
 
       const urls = extractCssUrls(backgroundImage);
-      return (
-        urls.find((url) => isSvgUrl(url)) ||
-        urls[0] ||
-        ""
-      );
+      return urls.find((url) => isSvgUrl(url)) || urls[0] || "";
     } catch {
       return "";
     }
@@ -3581,10 +3573,12 @@
   }
 
   function isSvgMimeType(value) {
-    return String(value || "")
-      .split(";", 1)[0]
-      .trim()
-      .toLowerCase() === "image/svg+xml";
+    return (
+      String(value || "")
+        .split(";", 1)[0]
+        .trim()
+        .toLowerCase() === "image/svg+xml"
+    );
   }
 
   function isWikimediaFilePageUrl(url) {
@@ -3686,7 +3680,8 @@
 
   function resolveUrl(url) {
     if (!url) return "";
-    if (url.startsWith("data:image/") || url.startsWith("data:video/")) return url;
+    if (url.startsWith("data:image/") || url.startsWith("data:video/"))
+      return url;
 
     try {
       return normalizeKnownImageUrl(new URL(url, window.location.href).href);
@@ -3696,7 +3691,11 @@
   }
 
   function normalizeKnownImageUrl(url) {
-    if (!url || url.startsWith("data:image/") || url.startsWith("data:video/")) {
+    if (
+      !url ||
+      url.startsWith("data:image/") ||
+      url.startsWith("data:video/")
+    ) {
       return url;
     }
 
@@ -3704,7 +3703,10 @@
       const parsed = new URL(url, window.location.href);
       const host = parsed.hostname.toLowerCase();
 
-      if (host === "upload.wikimedia.org" && parsed.pathname.includes("/thumb/")) {
+      if (
+        host === "upload.wikimedia.org" &&
+        parsed.pathname.includes("/thumb/")
+      ) {
         const originalPath = getWikimediaOriginalPath(parsed.pathname);
         if (originalPath) {
           parsed.pathname = originalPath;
@@ -3714,7 +3716,10 @@
       }
 
       if (host.endsWith("twimg.com")) {
-        if (parsed.searchParams.has("format") || parsed.searchParams.has("name")) {
+        if (
+          parsed.searchParams.has("format") ||
+          parsed.searchParams.has("name")
+        ) {
           parsed.searchParams.set("name", "orig");
         }
       }
@@ -3731,7 +3736,9 @@
     if (thumbIndex === -1 || segments.length <= thumbIndex + 2) return "";
 
     return `/${segments
-      .filter((_, index) => index !== thumbIndex && index !== segments.length - 1)
+      .filter(
+        (_, index) => index !== thumbIndex && index !== segments.length - 1,
+      )
       .join("/")}`;
   }
 
