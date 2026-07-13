@@ -1,14 +1,19 @@
 # hover-zoom
 
 `hover-zoom` contains a single Safari/Tampermonkey userscript,
-`hover-zoom-safari`, for inspecting media on web pages without leaving the page. It shows
-near-cursor previews for supported images and videos, and it can open supported
-media in a draggable, resizable in-page popout.
+`hover-zoom-safari`, for inspecting media on web pages without leaving the page.
+It shows near-cursor previews for supported images and videos, and it can open
+supported media in a draggable, resizable in-page popout.
+
+[Install Hover Zoom](https://raw.githubusercontent.com/paytonison/hover-zoom/main/hover-zoom.user.js)
 
 ## Repository contents
 
-- `src/hover-zoom-safari-v2.3.2.user.js`: the userscript to install.
-- `README.md`: this usage and development guide.
+- [`hover-zoom.user.js`](hover-zoom.user.js): the userscript to install.
+- [`README.md`](README.md): this usage and development guide.
+- [`LICENSE`](LICENSE): the BSD 3-Clause license.
+- [`.github/workflows/validate.yml`](.github/workflows/validate.yml): the
+  automatic JavaScript syntax check.
 
 There is no build step, package manifest, lint command, or automated test suite.
 
@@ -47,6 +52,8 @@ elements at the same screen coordinates for:
   possible.
 - Instagram images and videos when the page exposes them as ordinary media
   elements, background images, or direct media links.
+- OnlyFans images, videos, and background images nested inside post media
+  containers.
 - `twimg.com` image URLs, with `name=orig` requested when the URL uses Twitter's
   `format` or `name` query parameters.
 
@@ -59,9 +66,9 @@ with poster/frame fallbacks used when direct replay is not available.
 1. Install a Safari-compatible userscript manager.
 2. Prefer a manager with `GM_download` and `GM_xmlhttpRequest` support if you
    want the built-in download control to work reliably.
-3. Create a new userscript from
-   `src/hover-zoom-safari-v2.3.2.user.js`.
-4. Enable it and refresh any pages you want to test.
+3. Install [`hover-zoom.user.js`](https://raw.githubusercontent.com/paytonison/hover-zoom/main/hover-zoom.user.js),
+   or create a new userscript and paste in that file's contents.
+4. Enable the userscript and refresh any pages you want to use it on.
 
 The userscript metadata currently matches every `http` and `https` page:
 
@@ -122,17 +129,18 @@ common query parameters when possible. Otherwise, `.bin` is used.
 
 ## Development and testing
 
-Edit `src/hover-zoom-safari-v2.3.2.user.js` directly, reload the userscript in
-Safari, and manually verify behavior on real pages. Useful checks include hover
-previews, keyboard pinning, Alt/Option-click popouts, dragging, resizing,
-copy/open/download controls, keyboard shortcuts, and normal page click/scroll
-behavior.
+Edit `hover-zoom.user.js` directly, reload the userscript in Safari, and manually
+verify behavior on real pages. Useful checks include hover previews, keyboard
+pinning, Alt/Option-click popouts, dragging, resizing, copy/open/download
+controls, keyboard shortcuts, and normal page click/scroll behavior.
 
 For a quick syntax check, run:
 
 ```sh
-node --check 'src/hover-zoom-safari-v2.3.2.user.js'
+node --check hover-zoom.user.js
 ```
+
+The same syntax check runs automatically for pushes and pull requests.
 
 ## Security and privacy
 
@@ -141,6 +149,10 @@ node --check 'src/hover-zoom-safari-v2.3.2.user.js'
 - It reads media URLs from the current page and may request those URLs only when
   loading previews, opening popouts, or downloading media.
 - Treat page content as untrusted input when extending the script.
+
+## License
+
+`hover-zoom` is available under the [BSD 3-Clause License](LICENSE).
 
 ## Development Philosophy
 
