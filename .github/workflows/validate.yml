@@ -1,0 +1,23 @@
+name: Validate userscript
+
+on:
+  push:
+    branches:
+      - main
+      - beta
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  syntax:
+    name: JavaScript syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Check userscript syntax
+        run: node --check hover-zoom.user.js
+      - name: Run regression tests
+        run: node --test tests/*.test.js
