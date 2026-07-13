@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         hover-zoom-safari
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      3.0.0
+// @version      3.0.1
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -1165,15 +1165,11 @@
     event = null,
   ) {
     const lookup = createMediaLookup(start, clientX, clientY, event);
-    const candidate = findHoverCandidate(lookup);
-    if (
-      !candidate ||
-      (!candidate.allowSmallTarget &&
-        !isTargetLargeEnough(candidate.element, lookup))
-    ) {
-      revokeTemporaryUrl(candidate?.temporaryUrl || "");
-      return false;
-    }
+    const candidate = takeUsableHoverCandidate(
+      findHoverCandidate(lookup),
+      lookup,
+    );
+    if (!candidate) return false;
 
     debugLog("hover candidate", describeCandidate(candidate));
     activateHover(candidate, clientX, clientY, lookup);
@@ -2469,23 +2465,27 @@
     };
   }
 
-  function findImageCandidate(lookup) {
+  function findImageCandidate(lookup, forHover = false) {
     const { path } = lookup;
+    const takeCandidate = (candidate) =>
+      forHover ? takeUsableHoverCandidate(candidate, lookup) : candidate;
 
     for (const element of path) {
       if (element instanceof HTMLImageElement) {
-        const candidate = buildImageCandidate(element);
+        const candidate = takeCandidate(buildImageCandidate(element));
         if (candidate) return candidate;
       }
 
-      const inlineSvgCandidate = buildInlineSvgCandidate(element, lookup);
+      const inlineSvgCandidate = takeCandidate(
+        buildInlineSvgCandidate(element, lookup),
+      );
       if (inlineSvgCandidate) return inlineSvgCandidate;
     }
 
     for (const element of path) {
       const nestedImage = findNestedImageAtPoint(element, lookup);
       if (nestedImage) {
-        const candidate = buildImageCandidate(nestedImage);
+        const candidate = takeCandidate(buildImageCandidate(nestedImage));
         if (candidate) return candidate;
       }
 
@@ -2498,15 +2498,16 @@
         });
         if (candidate) {
           candidate.allowSmallTarget = candidate.kind === "svg";
-          return candidate;
+          const acceptedCandidate = takeCandidate(candidate);
+          if (acceptedCandidate) return acceptedCandidate;
         }
       }
 
       if (element.matches?.(BACKGROUND_IMAGE_SELECTOR)) {
         const backgroundUrl = getBackgroundImageUrl(element);
-        const candidate = buildUrlImageCandidate(element, backgroundUrl, {
-          lookup,
-        });
+        const candidate = takeCandidate(
+          buildUrlImageCandidate(element, backgroundUrl, { lookup }),
+        );
         if (candidate) return candidate;
       }
     }
@@ -2518,13 +2519,16 @@
     const { path } = lookup;
     if (!path.length) return null;
 
-    const siteCandidate = findSiteMediaCandidate(lookup, true);
+    const siteCandidate = takeUsableHoverCandidate(
+      findSiteMediaCandidate(lookup, true),
+      lookup,
+    );
     if (siteCandidate) return siteCandidate;
 
-    const videoCandidate = findHoverVideoCandidate(path);
+    const videoCandidate = findHoverVideoCandidate(path, lookup);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(lookup);
+    const imageCandidate = findImageCandidate(lookup, true);
     if (imageCandidate) {
       return { ...imageCandidate, previewMode: "image" };
     }
@@ -2750,14 +2754,20 @@
     return null;
   }
 
-  function findHoverVideoCandidate(path) {
+  function findHoverVideoCandidate(path, lookup) {
     for (const element of path) {
       if (element instanceof HTMLVideoElement) {
-        const candidate = buildHoverVideoCandidate(element);
+        const candidate = takeUsableHoverCandidate(
+          buildHoverVideoCandidate(element),
+          lookup,
+        );
         if (candidate) return candidate;
       }
 
-      const linkedCandidate = buildLinkedVideoCandidate(element, true);
+      const linkedCandidate = takeUsableHoverCandidate(
+        buildLinkedVideoCandidate(element, true),
+        lookup,
+      );
       if (linkedCandidate) return linkedCandidate;
     }
 
@@ -2906,6 +2916,19 @@
       rect.width >= CONFIG.minTargetPixels &&
       rect.height >= CONFIG.minTargetPixels
     );
+  }
+
+  function takeUsableHoverCandidate(candidate, lookup = null) {
+    if (!candidate) return null;
+    if (
+      candidate.allowSmallTarget ||
+      isTargetLargeEnough(candidate.element, lookup)
+    ) {
+      return candidate;
+    }
+
+    revokeTemporaryUrl(candidate.temporaryUrl || "");
+    return null;
   }
 
   function setHoverTarget(element, lookup = null) {

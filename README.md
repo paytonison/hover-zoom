@@ -13,9 +13,11 @@ supported media in a draggable, resizable in-page popout.
 - [`README.md`](README.md): this usage and development guide.
 - [`LICENSE`](LICENSE): the BSD 3-Clause license.
 - [`.github/workflows/validate.yml`](.github/workflows/validate.yml): the
-  automatic JavaScript syntax check.
+  automatic syntax and regression checks.
+- [`tests/`](tests): zero-dependency regression tests for candidate selection.
 
-There is no build step, package manifest, lint command, or automated test suite.
+There is no build step, package manifest, dependency installation, or lint
+command.
 
 ## What the userscript does
 
@@ -134,13 +136,14 @@ verify behavior on real pages. Useful checks include hover previews, keyboard
 pinning, Alt/Option-click popouts, dragging, resizing, copy/open/download
 controls, keyboard shortcuts, and normal page click/scroll behavior.
 
-For a quick syntax check, run:
+For the same checks used in CI, run:
 
 ```sh
 node --check hover-zoom.user.js
+node --test tests/*.test.js
 ```
 
-The same syntax check runs automatically for pushes and pull requests.
+These checks run automatically for pushes and pull requests.
 
 ## Security and privacy
 

@@ -19,3 +19,5 @@ jobs:
         uses: actions/checkout@v4
       - name: Check userscript syntax
         run: node --check hover-zoom.user.js
+      - name: Run regression tests
+        run: node --test tests/*.test.js
