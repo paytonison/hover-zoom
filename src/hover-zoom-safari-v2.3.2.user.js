@@ -1341,7 +1341,15 @@
     if (!state.hover.pinned) hideHover();
   }
 
-  function onDocumentMouseLeave() {
+  function onDocumentMouseLeave(event) {
+    // Safari sends descendant mouseleave events through the capture phase.
+    if (
+      event.target !== document &&
+      event.target !== document.documentElement
+    ) {
+      return;
+    }
+
     if (!state.hover.pinned) hideHover();
   }
 
@@ -1423,14 +1431,14 @@
     updateHoverInteractivity();
 
     if (previewMode === "live") {
+      state.hover.loadToken += 1;
+      clearHoverImageLoadHandlers();
       setHoverTarget(attachHoverLiveElement(candidate));
     } else if (previewMode === "video") {
       setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
       if (
         sameMedia &&
-        state.ui.hoverVideo.src === candidateUrl &&
-        state.hover.naturalW &&
-        state.hover.naturalH
+        state.ui.hoverVideo.src === candidateUrl
       ) {
         showHoverPreviewMode("video");
         applyHoverSize();
@@ -1441,9 +1449,7 @@
       setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
       if (
         !sameMedia ||
-        state.ui.hoverImg.src !== candidateUrl ||
-        !state.hover.naturalW ||
-        !state.hover.naturalH
+        state.ui.hoverImg.src !== candidateUrl
       ) {
         setHoverImageUrl(candidateUrl, candidate);
       } else {
@@ -1531,6 +1537,12 @@
 
   function isHoverVisible() {
     return state.ui.ready && state.ui.hoverWrap.style.display === "block";
+  }
+
+  function clearHoverImageLoadHandlers() {
+    if (!state.ui.hoverImg) return;
+    state.ui.hoverImg.onload = null;
+    state.ui.hoverImg.onerror = null;
   }
 
   function setHoverImageUrl(url, candidate = null) {
@@ -1736,11 +1748,17 @@
       hadControlsAttribute,
     } = live;
 
-    if (placeholder?.parentNode) {
-      placeholder.parentNode.insertBefore(element, placeholder);
+    const placeholderParent = placeholder?.parentNode;
+    if (placeholderParent) {
+      placeholderParent.insertBefore(element, placeholder);
       placeholder.remove();
-    } else if (originalParent?.isConnected) {
-      originalParent.insertBefore(element, originalNextSibling || null);
+    } else if (originalParent instanceof Node) {
+      const reference = (
+        originalNextSibling?.parentNode === originalParent
+          ? originalNextSibling
+          : null
+      );
+      originalParent.insertBefore(element, reference);
     }
 
     if (typeof originalStyle === "string" && originalStyle) {
