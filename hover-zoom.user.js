@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         hover-zoom-safari
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      3.0.1
+// @version      3.0.0
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @match        http://*/*
 // @match        https://*/*
@@ -139,6 +139,8 @@
     "webp",
   ]);
   const VIDEO_PREVIEW_CACHE = new WeakMap();
+  const VIDEO_FRAME_MAX_WIDTH = 1920;
+  const VIDEO_FRAME_MAX_HEIGHT = 1080;
 
   const state = {
     hover: {
@@ -1117,6 +1119,17 @@
 
     if (!state.hover.enabled || state.popout.open || state.hover.pinned) return;
 
+    // A live preview temporarily moves its video out of the source container.
+    // Keep that preview stable instead of discovering the exposed poster below.
+    if (
+      state.hover.previewMode === "live" &&
+      state.hover.target &&
+      pointWithinHoverTarget(event.clientX, event.clientY)
+    ) {
+      updateHoverPosition(event.clientX, event.clientY);
+      return;
+    }
+
     if (event.target !== state.hover.lastEventTarget) {
       state.hover.lastEventTarget = event.target;
       if (
@@ -1165,11 +1178,15 @@
     event = null,
   ) {
     const lookup = createMediaLookup(start, clientX, clientY, event);
-    const candidate = takeUsableHoverCandidate(
-      findHoverCandidate(lookup),
-      lookup,
-    );
-    if (!candidate) return false;
+    const candidate = findHoverCandidate(lookup);
+    if (
+      !candidate ||
+      (!candidate.allowSmallTarget &&
+        !isTargetLargeEnough(candidate.element, lookup))
+    ) {
+      revokeTemporaryUrl(candidate?.temporaryUrl || "");
+      return false;
+    }
 
     debugLog("hover candidate", describeCandidate(candidate));
     activateHover(candidate, clientX, clientY, lookup);
@@ -1209,6 +1226,9 @@
     }
 
     if (event.key === "z" || event.key === "Z") {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
       state.hover.enabled = !state.hover.enabled;
       state.hover.pinned = false;
       savePrefs();
@@ -1220,6 +1240,9 @@
     }
 
     if (event.key === "p" || event.key === "P") {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
       if (!state.hover.target) return;
       toggleHoverPinned();
     }
@@ -1715,11 +1738,12 @@
     }
 
     applyHoverSize();
-    return (
-      state.hover.live?.placeholder ||
-      candidate.hoverTarget ||
-      candidate.element
-    );
+    const stableHoverTarget =
+      candidate.hoverTarget instanceof Element &&
+      candidate.hoverTarget !== liveElement
+        ? candidate.hoverTarget
+        : state.hover.live?.placeholder;
+    return stableHoverTarget || candidate.element;
   }
 
   function teardownHoverLiveElement() {
@@ -2465,27 +2489,23 @@
     };
   }
 
-  function findImageCandidate(lookup, forHover = false) {
+  function findImageCandidate(lookup) {
     const { path } = lookup;
-    const takeCandidate = (candidate) =>
-      forHover ? takeUsableHoverCandidate(candidate, lookup) : candidate;
 
     for (const element of path) {
       if (element instanceof HTMLImageElement) {
-        const candidate = takeCandidate(buildImageCandidate(element));
+        const candidate = buildImageCandidate(element);
         if (candidate) return candidate;
       }
 
-      const inlineSvgCandidate = takeCandidate(
-        buildInlineSvgCandidate(element, lookup),
-      );
+      const inlineSvgCandidate = buildInlineSvgCandidate(element, lookup);
       if (inlineSvgCandidate) return inlineSvgCandidate;
     }
 
     for (const element of path) {
       const nestedImage = findNestedImageAtPoint(element, lookup);
       if (nestedImage) {
-        const candidate = takeCandidate(buildImageCandidate(nestedImage));
+        const candidate = buildImageCandidate(nestedImage);
         if (candidate) return candidate;
       }
 
@@ -2498,16 +2518,15 @@
         });
         if (candidate) {
           candidate.allowSmallTarget = candidate.kind === "svg";
-          const acceptedCandidate = takeCandidate(candidate);
-          if (acceptedCandidate) return acceptedCandidate;
+          return candidate;
         }
       }
 
       if (element.matches?.(BACKGROUND_IMAGE_SELECTOR)) {
         const backgroundUrl = getBackgroundImageUrl(element);
-        const candidate = takeCandidate(
-          buildUrlImageCandidate(element, backgroundUrl, { lookup }),
-        );
+        const candidate = buildUrlImageCandidate(element, backgroundUrl, {
+          lookup,
+        });
         if (candidate) return candidate;
       }
     }
@@ -2519,16 +2538,13 @@
     const { path } = lookup;
     if (!path.length) return null;
 
-    const siteCandidate = takeUsableHoverCandidate(
-      findSiteMediaCandidate(lookup, true),
-      lookup,
-    );
+    const siteCandidate = findSiteMediaCandidate(lookup, true);
     if (siteCandidate) return siteCandidate;
 
-    const videoCandidate = findHoverVideoCandidate(path, lookup);
+    const videoCandidate = findHoverVideoCandidate(path);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(lookup, true);
+    const imageCandidate = findImageCandidate(lookup);
     if (imageCandidate) {
       return { ...imageCandidate, previewMode: "image" };
     }
@@ -2754,20 +2770,14 @@
     return null;
   }
 
-  function findHoverVideoCandidate(path, lookup) {
+  function findHoverVideoCandidate(path) {
     for (const element of path) {
       if (element instanceof HTMLVideoElement) {
-        const candidate = takeUsableHoverCandidate(
-          buildHoverVideoCandidate(element),
-          lookup,
-        );
+        const candidate = buildHoverVideoCandidate(element);
         if (candidate) return candidate;
       }
 
-      const linkedCandidate = takeUsableHoverCandidate(
-        buildLinkedVideoCandidate(element, true),
-        lookup,
-      );
+      const linkedCandidate = buildLinkedVideoCandidate(element, true);
       if (linkedCandidate) return linkedCandidate;
     }
 
@@ -2916,19 +2926,6 @@
       rect.width >= CONFIG.minTargetPixels &&
       rect.height >= CONFIG.minTargetPixels
     );
-  }
-
-  function takeUsableHoverCandidate(candidate, lookup = null) {
-    if (!candidate) return null;
-    if (
-      candidate.allowSmallTarget ||
-      isTargetLargeEnough(candidate.element, lookup)
-    ) {
-      return candidate;
-    }
-
-    revokeTemporaryUrl(candidate.temporaryUrl || "");
-    return null;
   }
 
   function setHoverTarget(element, lookup = null) {
@@ -3250,13 +3247,16 @@
     if (!(video instanceof HTMLVideoElement)) return null;
 
     const videoUrl = pickBestVideoUrl(video);
-    const fallbackUrl = pickVideoPreviewUrl(video);
+    const replayable = isReplayableHoverVideoUrl(videoUrl);
+    const fallbackUrl = replayable
+      ? pickVideoPreviewUrl(video)
+      : pickVideoPosterUrl(video);
     const currentTime = Number.isFinite(video.currentTime)
       ? video.currentTime
       : 0;
     const shouldPlay = !video.paused && !video.ended;
 
-    if (isReplayableHoverVideoUrl(videoUrl)) {
+    if (replayable) {
       return {
         element: video,
         hoverTarget: video,
@@ -3308,13 +3308,13 @@
   }
 
   function pickBestImageUrl(image) {
+    const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
+    if (pictureSrcsetUrl) return pictureSrcsetUrl;
+
     const srcsetUrl = pickBestSrcsetUrl(
       image.getAttribute("srcset") || image.srcset || "",
     );
     if (srcsetUrl) return srcsetUrl;
-
-    const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
-    if (pictureSrcsetUrl) return pictureSrcsetUrl;
 
     for (const attr of LAZY_IMAGE_SRCSET_ATTRS) {
       const value = image.getAttribute(attr) || "";
@@ -3337,13 +3337,35 @@
     const picture = image.closest?.("picture");
     if (!(picture instanceof HTMLPictureElement)) return "";
 
-    let bestUrl = "";
+    const currentSrc = resolveUrl(image.currentSrc || "");
+    let firstMatchingUrl = "";
+
     for (const source of picture.querySelectorAll("source[srcset]")) {
-      const sourceUrl = pickBestSrcsetUrl(source.getAttribute("srcset") || "");
-      if (sourceUrl) bestUrl = sourceUrl;
+      const media = source.getAttribute("media") || "";
+      if (media) {
+        try {
+          if (!window.matchMedia(media).matches) continue;
+        } catch {
+          continue;
+        }
+      }
+
+      const srcset = source.getAttribute("srcset") || "";
+      const sourceUrl = pickBestSrcsetUrl(srcset);
+      if (!sourceUrl) continue;
+      if (!firstMatchingUrl) firstMatchingUrl = sourceUrl;
+
+      if (
+        currentSrc &&
+        parseSrcset(srcset).some(
+          (entry) => resolveUrl(entry.url) === currentSrc,
+        )
+      ) {
+        return sourceUrl;
+      }
     }
 
-    return bestUrl;
+    return currentSrc || firstMatchingUrl;
   }
 
   function pickBestVideoUrl(video) {
@@ -3388,29 +3410,41 @@
   function pickVideoPreviewUrl(video) {
     if (!(video instanceof HTMLVideoElement)) return "";
 
-    const posterUrl = resolveUrl(
-      video.getAttribute("poster") || video.poster || "",
-    );
+    const posterUrl = pickVideoPosterUrl(video);
     if (posterUrl) return posterUrl;
 
-    const cachedFrameUrl = VIDEO_PREVIEW_CACHE.get(video);
-    if (cachedFrameUrl) return cachedFrameUrl;
-
-    const frameUrl = captureVideoFrameUrl(video);
-    if (frameUrl) {
-      VIDEO_PREVIEW_CACHE.set(video, frameUrl);
-      return frameUrl;
+    if (VIDEO_PREVIEW_CACHE.has(video)) {
+      return VIDEO_PREVIEW_CACHE.get(video) || "";
     }
 
-    return "";
+    const frameUrl = captureVideoFrameUrl(video);
+    if (frameUrl || video.readyState >= 2) {
+      VIDEO_PREVIEW_CACHE.set(video, frameUrl);
+    }
+    return frameUrl;
+  }
+
+  function pickVideoPosterUrl(video) {
+    if (!(video instanceof HTMLVideoElement)) return "";
+    return resolveUrl(video.getAttribute("poster") || video.poster || "");
   }
 
   function captureVideoFrameUrl(video) {
     if (!(video instanceof HTMLVideoElement)) return "";
 
-    const width = Math.round(video.videoWidth || video.clientWidth || 0);
-    const height = Math.round(video.videoHeight || video.clientHeight || 0);
-    if (!width || !height) return "";
+    const sourceWidth = Math.round(video.videoWidth || video.clientWidth || 0);
+    const sourceHeight = Math.round(
+      video.videoHeight || video.clientHeight || 0,
+    );
+    if (!sourceWidth || !sourceHeight) return "";
+
+    const scale = Math.min(
+      1,
+      VIDEO_FRAME_MAX_WIDTH / sourceWidth,
+      VIDEO_FRAME_MAX_HEIGHT / sourceHeight,
+    );
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
 
     try {
       const canvas = document.createElement("canvas");
