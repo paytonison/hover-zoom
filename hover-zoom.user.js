@@ -139,6 +139,8 @@
     "webp",
   ]);
   const VIDEO_PREVIEW_CACHE = new WeakMap();
+  const VIDEO_FRAME_MAX_WIDTH = 1920;
+  const VIDEO_FRAME_MAX_HEIGHT = 1080;
 
   const state = {
     hover: {
@@ -1117,6 +1119,17 @@
 
     if (!state.hover.enabled || state.popout.open || state.hover.pinned) return;
 
+    // A live preview temporarily moves its video out of the source container.
+    // Keep that preview stable instead of discovering the exposed poster below.
+    if (
+      state.hover.previewMode === "live" &&
+      state.hover.target &&
+      pointWithinHoverTarget(event.clientX, event.clientY)
+    ) {
+      updateHoverPosition(event.clientX, event.clientY);
+      return;
+    }
+
     if (event.target !== state.hover.lastEventTarget) {
       state.hover.lastEventTarget = event.target;
       if (
@@ -1213,6 +1226,9 @@
     }
 
     if (event.key === "z" || event.key === "Z") {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
       state.hover.enabled = !state.hover.enabled;
       state.hover.pinned = false;
       savePrefs();
@@ -1224,6 +1240,9 @@
     }
 
     if (event.key === "p" || event.key === "P") {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
       if (!state.hover.target) return;
       toggleHoverPinned();
     }
@@ -1719,11 +1738,12 @@
     }
 
     applyHoverSize();
-    return (
-      state.hover.live?.placeholder ||
-      candidate.hoverTarget ||
-      candidate.element
-    );
+    const stableHoverTarget =
+      candidate.hoverTarget instanceof Element &&
+      candidate.hoverTarget !== liveElement
+        ? candidate.hoverTarget
+        : state.hover.live?.placeholder;
+    return stableHoverTarget || candidate.element;
   }
 
   function teardownHoverLiveElement() {
@@ -3227,13 +3247,16 @@
     if (!(video instanceof HTMLVideoElement)) return null;
 
     const videoUrl = pickBestVideoUrl(video);
-    const fallbackUrl = pickVideoPreviewUrl(video);
+    const replayable = isReplayableHoverVideoUrl(videoUrl);
+    const fallbackUrl = replayable
+      ? pickVideoPreviewUrl(video)
+      : pickVideoPosterUrl(video);
     const currentTime = Number.isFinite(video.currentTime)
       ? video.currentTime
       : 0;
     const shouldPlay = !video.paused && !video.ended;
 
-    if (isReplayableHoverVideoUrl(videoUrl)) {
+    if (replayable) {
       return {
         element: video,
         hoverTarget: video,
@@ -3285,13 +3308,13 @@
   }
 
   function pickBestImageUrl(image) {
+    const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
+    if (pictureSrcsetUrl) return pictureSrcsetUrl;
+
     const srcsetUrl = pickBestSrcsetUrl(
       image.getAttribute("srcset") || image.srcset || "",
     );
     if (srcsetUrl) return srcsetUrl;
-
-    const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
-    if (pictureSrcsetUrl) return pictureSrcsetUrl;
 
     for (const attr of LAZY_IMAGE_SRCSET_ATTRS) {
       const value = image.getAttribute(attr) || "";
@@ -3314,13 +3337,35 @@
     const picture = image.closest?.("picture");
     if (!(picture instanceof HTMLPictureElement)) return "";
 
-    let bestUrl = "";
+    const currentSrc = resolveUrl(image.currentSrc || "");
+    let firstMatchingUrl = "";
+
     for (const source of picture.querySelectorAll("source[srcset]")) {
-      const sourceUrl = pickBestSrcsetUrl(source.getAttribute("srcset") || "");
-      if (sourceUrl) bestUrl = sourceUrl;
+      const media = source.getAttribute("media") || "";
+      if (media) {
+        try {
+          if (!window.matchMedia(media).matches) continue;
+        } catch {
+          continue;
+        }
+      }
+
+      const srcset = source.getAttribute("srcset") || "";
+      const sourceUrl = pickBestSrcsetUrl(srcset);
+      if (!sourceUrl) continue;
+      if (!firstMatchingUrl) firstMatchingUrl = sourceUrl;
+
+      if (
+        currentSrc &&
+        parseSrcset(srcset).some(
+          (entry) => resolveUrl(entry.url) === currentSrc,
+        )
+      ) {
+        return sourceUrl;
+      }
     }
 
-    return bestUrl;
+    return currentSrc || firstMatchingUrl;
   }
 
   function pickBestVideoUrl(video) {
@@ -3365,29 +3410,41 @@
   function pickVideoPreviewUrl(video) {
     if (!(video instanceof HTMLVideoElement)) return "";
 
-    const posterUrl = resolveUrl(
-      video.getAttribute("poster") || video.poster || "",
-    );
+    const posterUrl = pickVideoPosterUrl(video);
     if (posterUrl) return posterUrl;
 
-    const cachedFrameUrl = VIDEO_PREVIEW_CACHE.get(video);
-    if (cachedFrameUrl) return cachedFrameUrl;
-
-    const frameUrl = captureVideoFrameUrl(video);
-    if (frameUrl) {
-      VIDEO_PREVIEW_CACHE.set(video, frameUrl);
-      return frameUrl;
+    if (VIDEO_PREVIEW_CACHE.has(video)) {
+      return VIDEO_PREVIEW_CACHE.get(video) || "";
     }
 
-    return "";
+    const frameUrl = captureVideoFrameUrl(video);
+    if (frameUrl || video.readyState >= 2) {
+      VIDEO_PREVIEW_CACHE.set(video, frameUrl);
+    }
+    return frameUrl;
+  }
+
+  function pickVideoPosterUrl(video) {
+    if (!(video instanceof HTMLVideoElement)) return "";
+    return resolveUrl(video.getAttribute("poster") || video.poster || "");
   }
 
   function captureVideoFrameUrl(video) {
     if (!(video instanceof HTMLVideoElement)) return "";
 
-    const width = Math.round(video.videoWidth || video.clientWidth || 0);
-    const height = Math.round(video.videoHeight || video.clientHeight || 0);
-    if (!width || !height) return "";
+    const sourceWidth = Math.round(video.videoWidth || video.clientWidth || 0);
+    const sourceHeight = Math.round(
+      video.videoHeight || video.clientHeight || 0,
+    );
+    if (!sourceWidth || !sourceHeight) return "";
+
+    const scale = Math.min(
+      1,
+      VIDEO_FRAME_MAX_WIDTH / sourceWidth,
+      VIDEO_FRAME_MAX_HEIGHT / sourceHeight,
+    );
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
 
     try {
       const canvas = document.createElement("canvas");
