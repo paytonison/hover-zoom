@@ -7,6 +7,8 @@ supported media in a draggable, resizable in-page popout.
 
 [Install Hover Zoom](https://raw.githubusercontent.com/paytonison/hover-zoom/main/hover-zoom.user.js)
 
+[Support Hover Zoom on Ko-fi](https://ko-fi.com/paytonison)
+
 ## Repository contents
 
 - [`hover-zoom.user.js`](hover-zoom.user.js): the userscript to install.

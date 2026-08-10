@@ -3,6 +3,7 @@
 // @namespace    https://github.com/paytonison/hover-zoom
 // @version      3.0.0
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
+// @contributionURL https://ko-fi.com/paytonison
 // @match        http://*/*
 // @match        https://*/*
 // @run-at       document-idle
