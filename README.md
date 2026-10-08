@@ -16,8 +16,7 @@ supported media in a draggable, resizable in-page popout.
 - [`LICENSE`](LICENSE): the BSD 3-Clause license.
 - [`.github/workflows/validate.yml`](.github/workflows/validate.yml): the
   automatic syntax and regression checks.
-- [`tests/`](tests): zero-dependency regression tests for media discovery,
-  source selection, preview cleanup, and downloads.
+- [`tests/`](tests): zero-dependency regression tests for full-image selection.
 
 There is no build step, package manifest, dependency installation, or lint
 command.
@@ -44,10 +43,13 @@ The script uses generic media discovery plus small site-aware URL handling where
 common sites need it. It searches the element under the pointer and nearby
 elements at the same screen coordinates for:
 
-- `<img>` elements, preferring the largest `srcset` candidate when one exists.
-- `currentSrc`, `src`, and common lazy-load attributes: `data-src`,
-  `data-original`, `data-url`, `data-lazy-src`, `data-zoom-src`, `data-hires`,
-  `data-full`, and `data-large`.
+- `<img>` elements, preferring explicit full-image attributes (`data-zoom-src`,
+  `data-full-src`, `data-full`, `data-hires`, `data-large`, and `data-original`)
+  over thumbnail display sources, then the largest applicable `srcset` candidate.
+- The browser-selected `<picture>` source, or the image's own `srcset` when
+  the browser uses its fallback image.
+- `currentSrc`, `src`, and common lazy-load attributes: `data-src`, `data-url`,
+  and `data-lazy-src`.
 - Direct image links around an image or under the pointer.
 - CSS `background-image` URLs on common container elements.
 - `<video>` elements, including `currentSrc`, `src`, and nested `<source>` URLs.
@@ -156,14 +158,12 @@ test -f "$1"
 node --test tests/*.test.js
 ```
 
-These checks run automatically for pushes to `main`, `beta`, and `working`,
-and for pull requests. The test step fails if the test files are missing.
+The syntax and regression checks run automatically for pushes to `main` and
+`beta`, and for pull requests.
 
-The tests exercise the actual userscript functions with simulated page elements
-and userscript-manager APIs. They cover small-overlay fallback, nested media,
-responsive image selection, video source identity and quality, lazy frame
-capture, pinning and failure cleanup, stale callbacks, temporary-URL lifetime,
-clipboard/download races, and filename inference.
+The tests exercise the actual userscript functions with simulated page elements.
+They cover full-image attributes, responsive image and picture source selection,
+direct image links, and ordinary image and lazy-load fallbacks.
 
 Real Safari/Tampermonkey checks remain necessary for playback, live-video
 restoration, dynamic site behavior, and actual saved downloads.

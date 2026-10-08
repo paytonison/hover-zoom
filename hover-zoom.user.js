@@ -65,16 +65,18 @@
     ".mw-mmv-image-inner-wrapper",
     ".mw-mmv-image",
   ].join(", ");
+  const FULL_IMAGE_ATTRS = [
+    "data-zoom-src",
+    "data-full-src",
+    "data-full",
+    "data-hires",
+    "data-large",
+    "data-original",
+  ];
   const LAZY_IMAGE_ATTRS = [
     "data-src",
-    "data-original",
     "data-url",
     "data-lazy-src",
-    "data-zoom-src",
-    "data-hires",
-    "data-full",
-    "data-large",
-    "data-full-src",
     "data-preview",
     "data-thumb",
     "data-thumbnail",
@@ -3585,6 +3587,13 @@
   }
 
   function pickBestImageUrl(image) {
+    // The rendered image and its srcset may both be thumbnail variants.
+    // Prefer an explicitly associated full image before display sources.
+    for (const attr of FULL_IMAGE_ATTRS) {
+      const value = image.getAttribute(attr)?.trim();
+      if (value) return resolveUrl(value);
+    }
+
     const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
     if (pictureSrcsetUrl) return pictureSrcsetUrl;
 
@@ -3642,7 +3651,9 @@
       }
     }
 
-    return currentSrc || firstMatchingUrl;
+    // If the browser chose the <img> fallback, let its own srcset and
+    // attributes resolve it; returning currentSrc here would lock in a thumb.
+    return currentSrc ? "" : firstMatchingUrl;
   }
 
   function pickBestVideoUrl(video) {
