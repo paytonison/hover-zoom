@@ -16,7 +16,7 @@ supported media in a draggable, resizable in-page popout.
 - [`LICENSE`](LICENSE): the BSD 3-Clause license.
 - [`.github/workflows/validate.yml`](.github/workflows/validate.yml): the
   automatic syntax and regression checks.
-- [`tests/`](tests): zero-dependency regression tests for candidate selection.
+- [`tests/`](tests): zero-dependency regression tests for full-image selection.
 
 There is no build step, package manifest, dependency installation, or lint
 command.
@@ -43,10 +43,13 @@ The script uses generic media discovery plus small site-aware URL handling where
 common sites need it. It searches the element under the pointer and nearby
 elements at the same screen coordinates for:
 
-- `<img>` elements, preferring the largest `srcset` candidate when one exists.
-- `currentSrc`, `src`, and common lazy-load attributes: `data-src`,
-  `data-original`, `data-url`, `data-lazy-src`, `data-zoom-src`, `data-hires`,
-  `data-full`, and `data-large`.
+- `<img>` elements, preferring explicit full-image attributes (`data-zoom-src`,
+  `data-full-src`, `data-full`, `data-hires`, `data-large`, and `data-original`)
+  over thumbnail display sources, then the largest applicable `srcset` candidate.
+- The browser-selected `<picture>` source, or the image's own `srcset` when
+  the browser uses its fallback image.
+- `currentSrc`, `src`, and common lazy-load attributes: `data-src`, `data-url`,
+  and `data-lazy-src`.
 - Direct image links around an image or under the pointer.
 - CSS `background-image` URLs on common container elements.
 - `<video>` elements, including `currentSrc`, `src`, and nested `<source>` URLs.
@@ -61,9 +64,17 @@ elements at the same screen coordinates for:
 - `twimg.com` image URLs, with `name=orig` requested when the URL uses Twitter's
   `format` or `name` query parameters.
 
-For hover video previews, direct video URLs are replayed in the preview. Blob or
-MediaSource-backed videos are moved into the preview temporarily when possible,
-with poster/frame fallbacks used when direct replay is not available.
+For hover video previews, the browser's active media source is preserved. Direct
+video URLs are replayed in the preview. Blob or MediaSource-backed videos are
+moved into the preview temporarily when possible. Poster/frame fallbacks are
+used if replay fails, and cached frames are refreshed when the video source
+changes. Moving the pointer over an unpinned preview target also checks for a
+source change when the page reuses the same video element.
+
+Video popouts prefer a compatible direct source, using explicit resolution
+metadata when available. When only a blob or MediaSource URL is exposed, the
+popout uses a poster or captured still if available, then attempts the original
+URL as a last fallback.
 
 ## Installation
 
@@ -128,8 +139,8 @@ common query parameters when possible. Otherwise, `.bin` is used.
 - Download reliability depends on the userscript manager, direct media access,
   and the site's response headers.
 - Some dynamic video players expose only blob or MediaSource URLs. Hover preview
-  may still work by temporarily moving the live video element, but popout and
-  download need a direct media URL.
+  may still work by temporarily moving the live video element. Popouts may show
+  a static fallback; downloading the underlying video needs a direct media URL.
 
 ## Development and testing
 
@@ -142,10 +153,20 @@ For the same checks used in CI, run:
 
 ```sh
 node --check hover-zoom.user.js
+set -- tests/*.test.js
+test -f "$1"
 node --test tests/*.test.js
 ```
 
-These checks run automatically for pushes and pull requests.
+The syntax and regression checks run automatically for pushes to `main` and
+`beta`, and for pull requests.
+
+The tests exercise the actual userscript functions with simulated page elements.
+They cover full-image attributes, responsive image and picture source selection,
+direct image links, and ordinary image and lazy-load fallbacks.
+
+Real Safari/Tampermonkey checks remain necessary for playback, live-video
+restoration, dynamic site behavior, and actual saved downloads.
 
 ## Security and privacy
 

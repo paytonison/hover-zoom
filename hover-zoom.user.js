@@ -65,16 +65,18 @@
     ".mw-mmv-image-inner-wrapper",
     ".mw-mmv-image",
   ].join(", ");
+  const FULL_IMAGE_ATTRS = [
+    "data-zoom-src",
+    "data-full-src",
+    "data-full",
+    "data-hires",
+    "data-large",
+    "data-original",
+  ];
   const LAZY_IMAGE_ATTRS = [
     "data-src",
-    "data-original",
     "data-url",
     "data-lazy-src",
-    "data-zoom-src",
-    "data-hires",
-    "data-full",
-    "data-large",
-    "data-full-src",
     "data-preview",
     "data-thumb",
     "data-thumbnail",
@@ -108,38 +110,109 @@
     },
   };
 
-  const EXT_BY_CONTENT_TYPE = {
-    "application/vnd.apple.mpegurl": "m3u8",
-    "application/x-mpegurl": "m3u8",
-    "image/avif": "avif",
-    "image/gif": "gif",
-    "image/jpeg": "jpeg",
-    "image/jpg": "jpeg",
-    "image/png": "png",
-    "image/svg+xml": "svg",
-    "image/webp": "webp",
-    "video/mp4": "mp4",
-    "video/ogg": "ogv",
-    "video/quicktime": "mov",
-    "video/webm": "webm",
-  };
-
-  const KNOWN_EXTENSIONS = new Set([
-    "avif",
-    "gif",
-    "jpeg",
-    "jpg",
-    "m3u8",
-    "m4v",
-    "mov",
-    "mp4",
-    "ogv",
-    "png",
-    "svg",
-    "webm",
-    "webp",
-  ]);
+  // Recognition and download naming share the same aliases and MIME types.
+  const MEDIA_FORMATS = [
+    {
+      type: "image",
+      extension: "apng",
+      aliases: ["apng"],
+      mimes: ["image/apng"],
+    },
+    {
+      type: "image",
+      extension: "avif",
+      aliases: ["avif"],
+      mimes: ["image/avif"],
+    },
+    {
+      type: "image",
+      extension: "bmp",
+      aliases: ["bmp"],
+      mimes: ["image/bmp", "image/x-ms-bmp"],
+    },
+    { type: "image", extension: "gif", aliases: ["gif"], mimes: ["image/gif"] },
+    {
+      type: "image",
+      extension: "ico",
+      aliases: ["ico"],
+      mimes: ["image/x-icon", "image/vnd.microsoft.icon"],
+    },
+    {
+      type: "image",
+      extension: "jpeg",
+      aliases: ["jpeg", "jpg"],
+      mimes: ["image/jpeg", "image/jpg"],
+    },
+    { type: "image", extension: "png", aliases: ["png"], mimes: ["image/png"] },
+    {
+      type: "image",
+      extension: "svg",
+      aliases: ["svg"],
+      mimes: ["image/svg+xml"],
+    },
+    {
+      type: "image",
+      extension: "tiff",
+      aliases: ["tiff", "tif"],
+      mimes: ["image/tiff"],
+    },
+    {
+      type: "image",
+      extension: "webp",
+      aliases: ["webp"],
+      mimes: ["image/webp"],
+    },
+    {
+      type: "video",
+      extension: "m3u8",
+      aliases: ["m3u8"],
+      mimes: ["application/vnd.apple.mpegurl", "application/x-mpegurl"],
+    },
+    {
+      type: "video",
+      extension: "m4v",
+      aliases: ["m4v"],
+      mimes: ["video/x-m4v"],
+    },
+    {
+      type: "video",
+      extension: "mov",
+      aliases: ["mov"],
+      mimes: ["video/quicktime"],
+    },
+    { type: "video", extension: "mp4", aliases: ["mp4"], mimes: ["video/mp4"] },
+    { type: "video", extension: "ogv", aliases: ["ogv"], mimes: ["video/ogg"] },
+    {
+      type: "video",
+      extension: "webm",
+      aliases: ["webm"],
+      mimes: ["video/webm"],
+    },
+  ];
+  const MEDIA_BY_EXTENSION = new Map(
+    MEDIA_FORMATS.flatMap((format) =>
+      format.aliases.map((alias) => [alias, format]),
+    ),
+  );
+  const MEDIA_BY_CONTENT_TYPE = new Map(
+    MEDIA_FORMATS.flatMap((format) =>
+      format.mimes.map((mime) => [mime, format]),
+    ),
+  );
+  const MEDIA_QUERY_KEYS = [
+    "content-type",
+    "content_type",
+    "ext",
+    "extension",
+    "file",
+    "filename",
+    "format",
+    "mime",
+    "name",
+    "type",
+  ];
   const VIDEO_PREVIEW_CACHE = new WeakMap();
+  const TEMPORARY_URL_LEASES = new Map();
   const VIDEO_FRAME_MAX_WIDTH = 1920;
   const VIDEO_FRAME_MAX_HEIGHT = 1080;
 
@@ -150,6 +223,9 @@
       target: null,
       url: "",
       previewMode: "image",
+      displayMode: "image",
+      sourceIdentity: "",
+      sourceElement: null,
       interactive: false,
       mouseX: 0,
       mouseY: 0,
@@ -172,11 +248,13 @@
       open: false,
       url: "",
       mediaType: "image",
+      downloadExtension: "",
       autoFit: true,
       loadToken: 0,
       drag: null,
       resize: null,
       pointerListenersActive: false,
+      savedUserSelect: null,
       toastTimer: 0,
       temporaryUrl: "",
       fallbackW: 0,
@@ -1180,14 +1258,7 @@
   ) {
     const lookup = createMediaLookup(start, clientX, clientY, event);
     const candidate = findHoverCandidate(lookup);
-    if (
-      !candidate ||
-      (!candidate.allowSmallTarget &&
-        !isTargetLargeEnough(candidate.element, lookup))
-    ) {
-      revokeTemporaryUrl(candidate?.temporaryUrl || "");
-      return false;
-    }
+    if (!candidate) return false;
 
     debugLog("hover candidate", describeCandidate(candidate));
     activateHover(candidate, clientX, clientY, lookup);
@@ -1313,7 +1384,6 @@
     if (state.popout.drag && event.pointerId === state.popout.drag.pointerId) {
       releasePointerCapture(state.popout.drag.handle, event.pointerId);
       state.popout.drag = null;
-      document.documentElement.style.userSelect = "";
     }
 
     if (
@@ -1322,10 +1392,10 @@
     ) {
       releasePointerCapture(state.popout.resize.handle, event.pointerId);
       state.popout.resize = null;
-      document.documentElement.style.userSelect = "";
     }
 
     if (!state.popout.drag && !state.popout.resize) {
+      restoreDocumentSelection();
       removeActivePointerListeners();
     }
   }
@@ -1400,8 +1470,13 @@
 
     debugLog("popout candidate", describeCandidate(candidate));
     state.hover.pinned = false;
-    hideHover();
-    openPopout(candidate);
+    retainTemporaryUrl(candidate.temporaryUrl);
+    try {
+      hideHover();
+      openPopout(candidate);
+    } finally {
+      releaseTemporaryUrl(candidate.temporaryUrl);
+    }
   }
 
   function toggleHoverPinned() {
@@ -1432,10 +1507,13 @@
       candidateUrl,
       fallbackUrl,
       candidate.liveElement,
+      candidate.sourceIdentity || "",
     );
 
     state.hover.url = candidateUrl;
     state.hover.previewMode = previewMode;
+    state.hover.sourceIdentity = candidate.sourceIdentity || "";
+    state.hover.sourceElement = candidate.sourceElement || candidate.element;
     state.hover.fallbackUrl = fallbackUrl;
     replaceHoverTemporaryUrl(temporaryUrl);
     state.hover.videoCurrentTime = clamp(
@@ -1453,7 +1531,7 @@
 
     if (previewMode === "live") {
       state.hover.loadToken += 1;
-      clearHoverImageLoadHandlers();
+      clearHoverImage();
       setHoverTarget(attachHoverLiveElement(candidate));
     } else if (previewMode === "video") {
       setHoverTarget(candidate.hoverTarget || candidate.element, lookup);
@@ -1478,11 +1556,18 @@
     updateHoverPosition(mouseX, mouseY);
   }
 
-  function isSameHoverMedia(previewMode, url, fallbackUrl, liveElement) {
+  function isSameHoverMedia(
+    previewMode,
+    url,
+    fallbackUrl,
+    liveElement,
+    sourceIdentity = "",
+  ) {
     if (!isHoverVisible()) return false;
     if (state.hover.previewMode !== previewMode) return false;
     if (state.hover.url !== url) return false;
     if (state.hover.fallbackUrl !== fallbackUrl) return false;
+    if (state.hover.sourceIdentity !== sourceIdentity) return false;
 
     if (previewMode === "live") {
       return state.hover.live?.element === liveElement;
@@ -1493,7 +1578,9 @@
 
   function hideHover() {
     cancelHoverPositionFrame();
+    state.hover.loadToken += 1;
     if (state.ui.ready) {
+      clearHoverImage();
       teardownHoverLiveElement();
       clearHoverVideo();
       showHoverPreviewMode("image");
@@ -1512,11 +1599,14 @@
   }
 
   function resetHoverCandidateState() {
-    state.hover.loadToken += 1;
     state.hover.target = null;
+    state.hover.pinned = false;
     state.hover.targetRect = null;
     state.hover.url = "";
     state.hover.previewMode = "image";
+    state.hover.displayMode = "image";
+    state.hover.sourceIdentity = "";
+    state.hover.sourceElement = null;
     state.hover.fallbackUrl = "";
     replaceHoverTemporaryUrl("");
     state.hover.videoCurrentTime = 0;
@@ -1527,23 +1617,41 @@
   }
 
   function replaceHoverTemporaryUrl(url) {
-    if (state.hover.temporaryUrl && state.hover.temporaryUrl !== url) {
-      revokeTemporaryUrl(state.hover.temporaryUrl);
-    }
-
-    state.hover.temporaryUrl = url || "";
+    replaceTemporaryUrl(state.hover, url);
   }
 
   function replacePopoutTemporaryUrl(url) {
-    if (state.popout.temporaryUrl && state.popout.temporaryUrl !== url) {
-      revokeTemporaryUrl(state.popout.temporaryUrl);
-    }
+    replaceTemporaryUrl(state.popout, url);
+  }
 
-    state.popout.temporaryUrl = url || "";
+  function replaceTemporaryUrl(owner, url) {
+    const nextUrl = url || "";
+    if (owner.temporaryUrl === nextUrl) return;
+    retainTemporaryUrl(nextUrl);
+    releaseTemporaryUrl(owner.temporaryUrl);
+    owner.temporaryUrl = nextUrl;
+  }
+
+  function retainTemporaryUrl(url) {
+    if (!url || !url.startsWith("blob:")) return;
+    // Previews and unfinished downloads may share the same generated media.
+    TEMPORARY_URL_LEASES.set(url, (TEMPORARY_URL_LEASES.get(url) || 0) + 1);
+  }
+
+  function releaseTemporaryUrl(url) {
+    if (!url || !url.startsWith("blob:")) return;
+    const leases = TEMPORARY_URL_LEASES.get(url) || 0;
+    if (leases > 1) {
+      TEMPORARY_URL_LEASES.set(url, leases - 1);
+      return;
+    }
+    TEMPORARY_URL_LEASES.delete(url);
+    revokeTemporaryUrl(url);
   }
 
   function revokeTemporaryUrl(url) {
     if (!url || !url.startsWith("blob:")) return;
+    if (TEMPORARY_URL_LEASES.has(url)) return;
 
     try {
       URL.revokeObjectURL(url);
@@ -1560,11 +1668,17 @@
     state.ui.hoverImg.onerror = null;
   }
 
+  function clearHoverImage() {
+    clearHoverImageLoadHandlers();
+    state.ui.hoverImg?.removeAttribute("src");
+  }
+
   function setHoverImageUrl(url, candidate = null) {
     const token = ++state.hover.loadToken;
     const img = state.ui.hoverImg;
     const fallbackSize = getCandidateFallbackSize(candidate);
 
+    clearHoverImageLoadHandlers();
     showHoverPreviewMode("image");
     clearHoverVideo();
     teardownHoverLiveElement();
@@ -1574,6 +1688,7 @@
 
     img.onload = () => {
       if (token !== state.hover.loadToken) return;
+      clearHoverImageLoadHandlers();
       const size = getLoadedImageSize(img, fallbackSize);
       state.hover.naturalW = size.width;
       state.hover.naturalH = size.height;
@@ -1589,6 +1704,7 @@
     };
 
     if (img.src === url && img.complete && img.naturalWidth) {
+      clearHoverImageLoadHandlers();
       const size = getLoadedImageSize(img, fallbackSize);
       state.hover.naturalW = size.width;
       state.hover.naturalH = size.height;
@@ -1604,12 +1720,14 @@
   function setHoverVideoCandidate(candidate) {
     const token = ++state.hover.loadToken;
     const video = state.ui.hoverVideo;
+    const fallbackSize = getCandidateFallbackSize(candidate);
 
+    clearHoverImage();
     showHoverPreviewMode("video");
     teardownHoverLiveElement();
     clearHoverVideo();
-    state.hover.naturalW = 0;
-    state.hover.naturalH = 0;
+    state.hover.naturalW = fallbackSize?.width || 0;
+    state.hover.naturalH = fallbackSize?.height || 0;
     applyHoverSize();
 
     video.onloadedmetadata = () => {
@@ -1641,8 +1759,9 @@
 
     video.onerror = () => {
       if (token !== state.hover.loadToken) return;
-      if (candidate.fallbackUrl) {
-        setHoverImageUrl(candidate.fallbackUrl);
+      const fallbackUrl = resolveVideoFallbackUrl(candidate);
+      if (fallbackUrl) {
+        setHoverImageUrl(fallbackUrl, candidate);
       } else {
         hideHover();
       }
@@ -1664,10 +1783,12 @@
   function attachHoverLiveElement(candidate) {
     const liveElement = candidate.liveElement;
     if (!(liveElement instanceof HTMLElement)) {
-      if (candidate.fallbackUrl) {
-        setHoverImageUrl(candidate.fallbackUrl);
+      const fallbackUrl = resolveVideoFallbackUrl(candidate);
+      if (fallbackUrl) {
+        setHoverImageUrl(fallbackUrl, candidate);
       } else {
         hideHover();
+        return null;
       }
       return candidate.hoverTarget || candidate.element;
     }
@@ -1692,10 +1813,12 @@
       const hadControlsAttribute = liveElement.hasAttribute("controls");
 
       if (!(originalParent instanceof Node)) {
-        if (candidate.fallbackUrl) {
-          setHoverImageUrl(candidate.fallbackUrl);
+        const fallbackUrl = resolveVideoFallbackUrl(candidate);
+        if (fallbackUrl) {
+          setHoverImageUrl(fallbackUrl, candidate);
         } else {
           hideHover();
+          return null;
         }
         return candidate.hoverTarget || candidate.element;
       }
@@ -1796,14 +1919,16 @@
   }
 
   function showHoverPreviewMode(mode) {
+    state.hover.displayMode = mode;
     state.ui.hoverImg.style.display = mode === "image" ? "block" : "none";
     state.ui.hoverVideo.style.display = mode === "video" ? "block" : "none";
     state.ui.hoverLiveHost.style.display = mode === "live" ? "block" : "none";
+    updateHoverInteractivity();
   }
 
   function updateHoverInteractivity() {
     state.hover.interactive =
-      state.hover.pinned && state.hover.previewMode !== "image";
+      state.hover.pinned && state.hover.displayMode !== "image";
     state.ui.hoverWrap.classList.toggle(
       "is-interactive",
       state.hover.interactive,
@@ -1858,10 +1983,44 @@
     if (state.hover.positionRaf) return;
 
     state.hover.positionRaf = window.requestAnimationFrame(() => {
+      if (isHoverVisible()) refreshHoverVideoSource();
       state.hover.positionRaf = 0;
       if (!isHoverVisible()) return;
       positionHoverNow(state.hover.mouseX, state.hover.mouseY);
     });
+  }
+
+  function refreshHoverVideoSource() {
+    const source = state.hover.sourceElement;
+    if (
+      !state.hover.enabled ||
+      state.hover.pinned ||
+      state.popout.open ||
+      !(source instanceof HTMLVideoElement) ||
+      !pointWithinHoverTarget(state.hover.mouseX, state.hover.mouseY)
+    ) {
+      return;
+    }
+    if (!source.isConnected) {
+      hideHover();
+      return;
+    }
+    // Check recycled video elements once per position frame, even when the
+    // pointer target is unchanged or the live video sits inside our preview.
+    if (getVideoSourceIdentity(source) === state.hover.sourceIdentity) return;
+
+    const candidate = buildHoverVideoCandidate(source);
+    const live = state.hover.live;
+    candidate.hoverTarget =
+      state.hover.target === live?.placeholder ? source : state.hover.target;
+    candidate.fallbackW = source.videoWidth || state.hover.naturalW;
+    candidate.fallbackH = source.videoHeight || state.hover.naturalH;
+    if (live && candidate.previewMode !== "live") teardownHoverLiveElement();
+    if (candidate.previewMode === "live") {
+      state.hover.naturalW = candidate.fallbackW;
+      state.hover.naturalH = candidate.fallbackH;
+    }
+    activateHover(candidate, state.hover.mouseX, state.hover.mouseY);
   }
 
   function cancelHoverPositionFrame() {
@@ -1890,8 +2049,14 @@
   }
 
   function openPopout(media) {
-    const { mediaUrl, mediaType, fallbackW, fallbackH, temporaryUrl } =
-      getPopoutMediaDescriptor(media);
+    const {
+      mediaUrl,
+      mediaType,
+      fallbackW,
+      fallbackH,
+      temporaryUrl,
+      downloadExtension,
+    } = getPopoutMediaDescriptor(media);
 
     if (!mediaUrl) return;
     ensureUi();
@@ -1899,6 +2064,7 @@
     state.popout.open = true;
     state.popout.url = mediaUrl;
     state.popout.mediaType = mediaType;
+    state.popout.downloadExtension = downloadExtension;
     state.popout.autoFit = true;
     state.popout.fallbackW = fallbackW;
     state.popout.fallbackH = fallbackH;
@@ -1941,8 +2107,19 @@
       typeof media?.fallbackH === "number" ? media.fallbackH : 0;
     const temporaryUrl =
       typeof media?.temporaryUrl === "string" ? media.temporaryUrl : "";
+    const downloadExtension =
+      typeof media?.downloadExtension === "string"
+        ? media.downloadExtension
+        : "";
 
-    return { mediaUrl, mediaType, fallbackW, fallbackH, temporaryUrl };
+    return {
+      mediaUrl,
+      mediaType,
+      fallbackW,
+      fallbackH,
+      temporaryUrl,
+      downloadExtension,
+    };
   }
 
   function clearPopoutLoadHandlers() {
@@ -2027,10 +2204,10 @@
     state.ui.popoutImg.removeAttribute("src");
     state.ui.overlay.classList.remove("is-open");
     state.ui.popoutToast.classList.remove("is-visible");
-    document.documentElement.style.userSelect = "";
     replacePopoutTemporaryUrl("");
     state.popout.url = "";
     state.popout.mediaType = "image";
+    state.popout.downloadExtension = "";
     state.popout.fallbackW = 0;
     state.popout.fallbackH = 0;
   }
@@ -2042,80 +2219,108 @@
 
   async function copyPopoutUrl() {
     if (!state.popout.url) return;
+    const operation = capturePopoutOperation();
 
     try {
-      await navigator.clipboard.writeText(state.popout.url);
-      showPopoutToast("Copied URL");
+      await navigator.clipboard.writeText(operation.url);
+      if (isCurrentPopoutOperation(operation)) showPopoutToast("Copied URL");
     } catch {
-      window.prompt("Copy image URL:", state.popout.url);
+      if (isCurrentPopoutOperation(operation)) {
+        window.prompt("Copy media URL:", operation.url);
+      }
     }
+  }
+
+  function capturePopoutOperation() {
+    return { url: state.popout.url, token: state.popout.loadToken };
+  }
+
+  function isCurrentPopoutOperation(operation) {
+    return (
+      state.popout.open &&
+      operation.token === state.popout.loadToken &&
+      operation.url === state.popout.url
+    );
   }
 
   async function downloadCurrentMedia() {
     const url = getCurrentPopoutMediaUrl();
     if (!url) return;
-
-    const fallbackName = buildDownloadFilename(url, "");
-    try {
-      await runGMDownload(url, fallbackName);
-      showPopoutToast("Download started");
-      return;
-    } catch {}
+    const operation = capturePopoutOperation();
+    const extensionHint = state.popout.downloadExtension;
+    const temporaryUrl = state.popout.temporaryUrl === url ? url : "";
+    retainTemporaryUrl(temporaryUrl);
 
     try {
-      const { blob, contentType } = await fetchBlobViaGM(url);
-      const filename = buildDownloadFilename(url, contentType);
-      downloadBlobToDisk(blob, filename);
-      showPopoutToast("Downloaded");
-    } catch (error) {
-      console.error("[Image Popout] Download failed:", error);
-      showPopoutToast("Download failed");
+      const fallbackName = buildDownloadFilename(url, "", extensionHint);
+      try {
+        await runGMDownload(url, fallbackName);
+        if (isCurrentPopoutOperation(operation)) {
+          showPopoutToast("Download started");
+        }
+        return;
+      } catch {}
+
+      try {
+        const { blob, contentType } = await fetchBlobViaGM(url);
+        const filename = buildDownloadFilename(url, contentType, extensionHint);
+        downloadBlobToDisk(blob, filename);
+        if (isCurrentPopoutOperation(operation)) showPopoutToast("Downloaded");
+      } catch (error) {
+        console.error("[Image Popout] Download failed:", error);
+        if (isCurrentPopoutOperation(operation)) {
+          showPopoutToast("Download failed");
+        }
+      }
+    } finally {
+      releaseTemporaryUrl(temporaryUrl);
     }
   }
 
   function getCurrentPopoutMediaUrl() {
     if (!state.popout.open || !state.popout.url) return "";
-    if (state.popout.mediaType === "video") {
-      return (
-        pickBestVideoUrl(state.ui.popoutVideo) || resolveUrl(state.popout.url)
-      );
-    }
+    // currentSrc can still describe the previous video while a new one loads.
     return resolveUrl(state.popout.url);
   }
 
   function inferExtensionFromContentType(contentType) {
     if (!contentType) return "";
     const normalized = String(contentType).toLowerCase().split(";")[0].trim();
-    return EXT_BY_CONTENT_TYPE[normalized] || "";
+    return MEDIA_BY_CONTENT_TYPE.get(normalized)?.extension || "";
   }
 
   function inferExtensionFromUrl(url) {
-    if (!url) return "";
+    return getMediaFormatFromUrl(url)?.extension || "";
+  }
+
+  function getMediaFormatFromHint(value) {
+    const normalized = String(value || "")
+      .trim()
+      .toLowerCase();
+    const mime = MEDIA_BY_CONTENT_TYPE.get(normalized.split(";")[0]);
+    if (mime) return mime;
+    const extension = normalized.match(/(?:^|\.)([a-z0-9]{2,5})$/)?.[1];
+    return MEDIA_BY_EXTENSION.get(extension) || null;
+  }
+
+  function getMediaFormatFromUrl(url) {
+    if (!url) return null;
+    const dataType = String(url).match(/^data:([^;,]+)/i)?.[1];
+    if (dataType) return getMediaFormatFromHint(dataType);
 
     try {
       const parsed = new URL(url, window.location.href);
-      const pathExtMatch = parsed.pathname
-        .toLowerCase()
-        .match(/\.([a-z0-9]{2,5})$/);
-      if (pathExtMatch) {
-        const ext = pathExtMatch[1];
-        if (KNOWN_EXTENSIONS.has(ext)) return ext === "jpg" ? "jpeg" : ext;
-      }
+      const pathExtension = parsed.pathname.match(/\.([a-z0-9]{2,5})$/i)?.[1];
+      const pathFormat = getMediaFormatFromHint(pathExtension);
+      if (pathFormat) return pathFormat;
 
-      for (const key of ["ext", "extension", "format", "mime", "name"]) {
-        const value = parsed.searchParams.get(key);
-        if (!value) continue;
-        const normalized = value
-          .toLowerCase()
-          .replace(/^image\//, "")
-          .replace(/^video\//, "");
-        if (KNOWN_EXTENSIONS.has(normalized)) {
-          return normalized === "jpg" ? "jpeg" : normalized;
-        }
+      for (const key of MEDIA_QUERY_KEYS) {
+        const format = getMediaFormatFromHint(parsed.searchParams.get(key));
+        if (format) return format;
       }
     } catch {}
 
-    return "";
+    return null;
   }
 
   function parseContentTypeFromHeaders(headers) {
@@ -2139,9 +2344,10 @@
     return `hz_${host}_${yyyy}-${mm}-${dd}_${hh}-${min}-${ss}`;
   }
 
-  function buildDownloadFilename(url, contentType) {
+  function buildDownloadFilename(url, contentType, extensionHint = "") {
     const ext =
       inferExtensionFromContentType(contentType) ||
+      getMediaFormatFromHint(extensionHint)?.extension ||
       inferExtensionFromUrl(url) ||
       "bin";
     return `${buildDownloadBaseName()}.${ext}`;
@@ -2266,7 +2472,7 @@
 
     event.preventDefault();
     state.popout.autoFit = false;
-    document.documentElement.style.userSelect = "none";
+    suppressDocumentSelection();
 
     state.popout.drag = {
       handle: event.currentTarget,
@@ -2293,7 +2499,7 @@
 
     event.preventDefault();
     state.popout.autoFit = false;
-    document.documentElement.style.userSelect = "none";
+    suppressDocumentSelection();
 
     state.popout.resize = {
       handle: event.currentTarget,
@@ -2345,8 +2551,30 @@
       state.popout.resize = null;
     }
 
-    document.documentElement.style.userSelect = "";
+    restoreDocumentSelection();
     removeActivePointerListeners();
+  }
+
+  function suppressDocumentSelection() {
+    if (state.popout.savedUserSelect) return;
+    const style = document.documentElement.style;
+    state.popout.savedUserSelect = {
+      value: style.getPropertyValue("user-select"),
+      priority: style.getPropertyPriority("user-select"),
+    };
+    style.setProperty("user-select", "none", "important");
+  }
+
+  function restoreDocumentSelection() {
+    const saved = state.popout.savedUserSelect;
+    if (!saved) return;
+    const style = document.documentElement.style;
+    if (saved.value) {
+      style.setProperty("user-select", saved.value, saved.priority);
+    } else {
+      style.removeProperty("user-select");
+    }
+    state.popout.savedUserSelect = null;
   }
 
   function capturePointer(handle, pointerId) {
@@ -2490,24 +2718,73 @@
     };
   }
 
-  function findImageCandidate(lookup) {
+  // Keep source identity separate from the container used for pointer targeting.
+  function createMediaCandidate(options) {
+    if (!(options?.element instanceof Element)) return null;
+    const type = options.type === "video" ? "video" : "image";
+    const previewMode = ["image", "video", "live"].includes(options.previewMode)
+      ? options.previewMode
+      : type;
+    return {
+      ...options,
+      element: options.element,
+      sourceElement: options.sourceElement || options.element,
+      hoverTarget: options.hoverTarget || options.element,
+      type,
+      previewMode,
+      url: options.url || "",
+      fallbackUrl: options.fallbackUrl || "",
+      temporaryUrl: options.temporaryUrl || "",
+      fallbackW: Number(options.fallbackW) || 0,
+      fallbackH: Number(options.fallbackH) || 0,
+      allowSmallTarget: options.allowSmallTarget === true,
+      downloadExtension:
+        options.downloadExtension ||
+        (options.kind === "svg"
+          ? "svg"
+          : inferExtensionFromUrl(options.url || "")),
+    };
+  }
+
+  function takeUsableHoverCandidate(candidate, lookup) {
+    if (!candidate) return null;
+    const target = candidate.hoverTarget || candidate.element;
+    if (
+      target instanceof Element &&
+      target.isConnected &&
+      (candidate.allowSmallTarget || isTargetLargeEnough(target, lookup))
+    ) {
+      return candidate;
+    }
+    revokeTemporaryUrl(candidate.temporaryUrl);
+    return null;
+  }
+
+  function findImageCandidate(lookup, forHover = false) {
     const { path } = lookup;
+    const take = (candidate) =>
+      forHover ? takeUsableHoverCandidate(candidate, lookup) : candidate;
 
     for (const element of path) {
       if (element instanceof HTMLImageElement) {
-        const candidate = buildImageCandidate(element);
+        const candidate = take(buildImageCandidate(element));
         if (candidate) return candidate;
       }
 
-      const inlineSvgCandidate = buildInlineSvgCandidate(element, lookup);
+      const inlineSvgCandidate = take(buildInlineSvgCandidate(element, lookup));
       if (inlineSvgCandidate) return inlineSvgCandidate;
     }
 
     for (const element of path) {
-      const nestedImage = findNestedImageAtPoint(element, lookup);
-      if (nestedImage) {
-        const candidate = buildImageCandidate(nestedImage);
-        if (candidate) return candidate;
+      if (element.matches?.(NESTED_IMAGE_CONTAINER_SELECTOR)) {
+        for (const image of querySelectorAllCached(element, "img", lookup)) {
+          if (
+            !pointWithinElement(image, lookup.clientX, lookup.clientY, lookup)
+          )
+            continue;
+          const candidate = take(buildImageCandidate(image));
+          if (candidate) return candidate;
+        }
       }
 
       if (element.matches?.("a[href]")) {
@@ -2519,15 +2796,18 @@
         });
         if (candidate) {
           candidate.allowSmallTarget = candidate.kind === "svg";
-          return candidate;
+          const usable = take(candidate);
+          if (usable) return usable;
         }
       }
 
       if (element.matches?.(BACKGROUND_IMAGE_SELECTOR)) {
         const backgroundUrl = getBackgroundImageUrl(element);
-        const candidate = buildUrlImageCandidate(element, backgroundUrl, {
-          lookup,
-        });
+        const candidate = take(
+          buildUrlImageCandidate(element, backgroundUrl, {
+            lookup,
+          }),
+        );
         if (candidate) return candidate;
       }
     }
@@ -2542,18 +2822,29 @@
     const siteCandidate = findSiteMediaCandidate(lookup, true);
     if (siteCandidate) return siteCandidate;
 
-    const videoCandidate = findHoverVideoCandidate(path);
+    const videoCandidate = findHoverVideoCandidate(path, lookup);
     if (videoCandidate) return videoCandidate;
 
-    const imageCandidate = findImageCandidate(lookup);
+    const imageCandidate = findImageCandidate(lookup, true);
     if (imageCandidate) {
-      return { ...imageCandidate, previewMode: "image" };
+      return imageCandidate;
     }
 
     return null;
   }
 
   function findPopoutCandidate(start, clientX, clientY, event = null) {
+    // A live preview has moved the original video away from this point.
+    // Resolve it before generic discovery can choose the exposed poster below.
+    if (
+      state.hover.previewMode === "live" &&
+      state.hover.live &&
+      !isInsideUserscriptUi(start) &&
+      pointWithinHoverTarget(clientX, clientY)
+    ) {
+      const liveCandidate = buildPopoutVideoCandidate(state.hover.live.element);
+      if (liveCandidate) return liveCandidate;
+    }
     const lookup = createMediaLookup(start, clientX, clientY, event);
     const { path } = lookup;
     if (!path.length) return null;
@@ -2566,7 +2857,7 @@
 
     const imageCandidate = findImageCandidate(lookup);
     if (imageCandidate) {
-      return { ...imageCandidate, type: "image" };
+      return imageCandidate;
     }
 
     return null;
@@ -2593,8 +2884,11 @@
     const containers = collectOnlyFansMediaContainers(lookup);
 
     for (const container of containers) {
-      const video = findBestNestedMediaElement(container, "video", lookup);
-      if (video instanceof HTMLVideoElement) {
+      for (const video of findNestedMediaElementsByArea(
+        container,
+        "video",
+        lookup,
+      )) {
         const candidate = forHover
           ? buildHoverVideoCandidate(video)
           : buildPopoutVideoCandidate(video);
@@ -2603,8 +2897,11 @@
         }
       }
 
-      const image = findBestNestedMediaElement(container, "img", lookup);
-      if (image instanceof HTMLImageElement) {
+      for (const image of findNestedMediaElementsByArea(
+        container,
+        "img",
+        lookup,
+      )) {
         const candidate = buildImageCandidate(image);
         if (candidate) {
           return withOnlyFansContainer(candidate, container, forHover);
@@ -2625,20 +2922,12 @@
   }
 
   function withOnlyFansContainer(candidate, container, forHover) {
-    if (forHover) {
-      return {
-        ...candidate,
-        element: container,
-        hoverTarget: container,
-        previewMode: candidate.previewMode || "image",
-      };
-    }
-
-    return {
+    return createMediaCandidate({
       ...candidate,
       element: container,
-      type: candidate.type || "image",
-    };
+      sourceElement: candidate.sourceElement || candidate.element,
+      hoverTarget: forHover ? container : candidate.hoverTarget,
+    });
   }
 
   function collectOnlyFansMediaContainers(lookup) {
@@ -2692,11 +2981,10 @@
     return true;
   }
 
-  function findBestNestedMediaElement(container, selector, lookup) {
-    if (!(container instanceof Element)) return null;
+  function findNestedMediaElementsByArea(container, selector, lookup) {
+    if (!(container instanceof Element)) return [];
 
-    let bestElement = null;
-    let bestArea = -1;
+    const eligible = [];
 
     const push = (element) => {
       if (!(element instanceof Element)) return;
@@ -2704,11 +2992,7 @@
       if (!rect || !pointWithinRect(rect, lookup.clientX, lookup.clientY))
         return;
 
-      const area = getRectArea(rect);
-      if (area > bestArea) {
-        bestArea = area;
-        bestElement = element;
-      }
+      eligible.push({ element, area: getRectArea(rect) });
     };
 
     if (container.matches?.(selector)) push(container);
@@ -2716,7 +3000,11 @@
       push(element);
     }
 
-    return bestElement;
+    // Build candidates only as they are tried: later videos may need a canvas
+    // fallback, and invalid placeholders must not hide usable media below.
+    return eligible
+      .sort((left, right) => right.area - left.area)
+      .map((entry) => entry.element);
   }
 
   function getVisibleMediaRect(element, lookup = null) {
@@ -2754,31 +3042,53 @@
   }
 
   function buildPopoutVideoCandidate(video) {
+    if (!(video instanceof HTMLVideoElement)) return null;
+
     const videoUrl = pickBestVideoUrl(video);
     if (videoUrl && isReplayableHoverVideoUrl(videoUrl)) {
-      return { element: video, type: "video", url: videoUrl };
+      return createMediaCandidate({
+        element: video,
+        type: "video",
+        url: videoUrl,
+      });
     }
 
+    // A MediaSource URL cannot reliably be replayed in a second player. Use a
+    // static preview when no compatible declared video source is available.
     const fallbackUrl = pickVideoPreviewUrl(video);
     if (fallbackUrl) {
-      return { element: video, type: "image", url: fallbackUrl };
+      return createMediaCandidate({
+        element: video,
+        type: "image",
+        url: fallbackUrl,
+      });
     }
 
     if (videoUrl) {
-      return { element: video, type: "video", url: videoUrl };
+      return createMediaCandidate({
+        element: video,
+        type: "video",
+        url: videoUrl,
+      });
     }
 
     return null;
   }
 
-  function findHoverVideoCandidate(path) {
+  function findHoverVideoCandidate(path, lookup) {
     for (const element of path) {
       if (element instanceof HTMLVideoElement) {
-        const candidate = buildHoverVideoCandidate(element);
+        const candidate = takeUsableHoverCandidate(
+          buildHoverVideoCandidate(element),
+          lookup,
+        );
         if (candidate) return candidate;
       }
 
-      const linkedCandidate = buildLinkedVideoCandidate(element, true);
+      const linkedCandidate = takeUsableHoverCandidate(
+        buildLinkedVideoCandidate(element, true),
+        lookup,
+      );
       if (linkedCandidate) return linkedCandidate;
     }
 
@@ -2788,10 +3098,8 @@
   function findPopoutVideoCandidate(path) {
     for (const element of path) {
       if (element instanceof HTMLVideoElement) {
-        const videoUrl = pickBestVideoUrl(element);
-        if (videoUrl) {
-          return { element, type: "video", url: videoUrl };
-        }
+        const candidate = buildPopoutVideoCandidate(element);
+        if (candidate) return candidate;
       }
 
       const linkedCandidate = buildLinkedVideoCandidate(element, false);
@@ -2845,10 +3153,10 @@
     if (!videoUrl) return null;
 
     if (!forHover) {
-      return { element, type: "video", url: videoUrl };
+      return createMediaCandidate({ element, type: "video", url: videoUrl });
     }
 
-    return {
+    return createMediaCandidate({
       element,
       hoverTarget: element,
       type: "video",
@@ -2857,7 +3165,7 @@
       currentTime: 0,
       shouldPlay: false,
       fallbackUrl: "",
-    };
+    });
   }
 
   function getElementsAtPoint(lookup) {
@@ -3052,7 +3360,12 @@
       options.lookup || null,
       kind === "svg",
     );
-    const candidate = { element, url: resolvedUrl };
+    const candidate = {
+      element,
+      type: "image",
+      url: resolvedUrl,
+      downloadExtension: inferExtensionFromContentType(options.mimeType),
+    };
 
     if (kind) candidate.kind = kind;
     if (options.temporaryUrl) candidate.temporaryUrl = options.temporaryUrl;
@@ -3061,7 +3374,7 @@
       candidate.fallbackH = size.height;
     }
 
-    return candidate;
+    return createMediaCandidate(candidate);
   }
 
   function buildInlineSvgCandidate(element, lookup) {
@@ -3247,40 +3560,24 @@
   function buildHoverVideoCandidate(video) {
     if (!(video instanceof HTMLVideoElement)) return null;
 
-    const videoUrl = pickBestVideoUrl(video);
+    const videoUrl = pickPlaybackVideoUrl(video);
     const replayable = isReplayableHoverVideoUrl(videoUrl);
-    const fallbackUrl = replayable
-      ? pickVideoPreviewUrl(video)
-      : pickVideoPosterUrl(video);
     const currentTime = Number.isFinite(video.currentTime)
       ? video.currentTime
       : 0;
     const shouldPlay = !video.paused && !video.ended;
 
-    if (replayable) {
-      return {
-        element: video,
-        hoverTarget: video,
-        type: "video",
-        previewMode: "video",
-        url: videoUrl,
-        currentTime,
-        shouldPlay,
-        fallbackUrl,
-      };
-    }
-
-    return {
+    return createMediaCandidate({
       element: video,
-      hoverTarget: video,
       type: "video",
-      previewMode: "live",
+      previewMode: replayable ? "video" : "live",
       url: videoUrl,
       currentTime,
       shouldPlay,
-      fallbackUrl,
-      liveElement: video,
-    };
+      fallbackUrl: pickVideoPosterUrl(video),
+      sourceIdentity: getVideoSourceIdentity(video),
+      liveElement: replayable ? null : video,
+    });
   }
 
   function isReplayableHoverVideoUrl(url) {
@@ -3289,26 +3586,14 @@
     );
   }
 
-  function findNestedImageAtPoint(element, lookup) {
-    if (!(element instanceof Element)) return null;
-    if (
-      typeof lookup.clientX !== "number" ||
-      typeof lookup.clientY !== "number"
-    ) {
-      return null;
-    }
-    if (!element.matches?.(NESTED_IMAGE_CONTAINER_SELECTOR)) return null;
-
-    for (const image of querySelectorAllCached(element, "img", lookup)) {
-      if (pointWithinElement(image, lookup.clientX, lookup.clientY, lookup)) {
-        return image;
-      }
-    }
-
-    return null;
-  }
-
   function pickBestImageUrl(image) {
+    // The rendered image and its srcset may both be thumbnail variants.
+    // Prefer an explicitly associated full image before display sources.
+    for (const attr of FULL_IMAGE_ATTRS) {
+      const value = image.getAttribute(attr)?.trim();
+      if (value) return resolveUrl(value);
+    }
+
     const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
     if (pictureSrcsetUrl) return pictureSrcsetUrl;
 
@@ -3366,30 +3651,67 @@
       }
     }
 
-    return currentSrc || firstMatchingUrl;
+    // If the browser chose the <img> fallback, let its own srcset and
+    // attributes resolve it; returning currentSrc here would lock in a thumb.
+    return currentSrc ? "" : firstMatchingUrl;
   }
 
   function pickBestVideoUrl(video) {
     if (!video) return "";
 
-    const current = resolveUrl(video.currentSrc || video.src || "");
-    const currentScore = extractQualityScore(current);
-    const currentIsBlobLike =
-      current.startsWith("blob:") || current.startsWith("data:");
+    return pickBestDirectVideoUrl(video) || pickPlaybackVideoUrl(video);
+  }
+
+  function pickPlaybackVideoUrl(video) {
+    if (!video) return "";
+
+    // Preserve the resource chosen by the browser, especially an active
+    // MediaSource player, even when a higher-resolution source is declared.
+    return (
+      resolveUrl(video.currentSrc || video.src || "") ||
+      pickBestDeclaredVideoUrl(video)
+    );
+  }
+
+  function pickBestDirectVideoUrl(video) {
+    let bestUrl = "";
+    let bestScore = -1;
+
+    for (const rawUrl of [video.currentSrc, video.src]) {
+      const url = resolveUrl(rawUrl || "");
+      if (!isReplayableHoverVideoUrl(url)) continue;
+      const score = extractQualityScore(url);
+      if (score <= bestScore) continue;
+      bestUrl = url;
+      bestScore = score;
+    }
+
+    const declared = pickBestDeclaredVideoSource(video, true);
+    if (declared && declared.score > bestScore) return declared.url;
+    return bestUrl;
+  }
+
+  function pickBestDeclaredVideoUrl(video) {
+    return pickBestDeclaredVideoSource(video)?.url || "";
+  }
+
+  function pickBestDeclaredVideoSource(video, directOnly = false) {
+    if (!video) return null;
 
     let bestSourceUrl = "";
     let bestSourceScore = -1;
 
     for (const source of video.querySelectorAll("source[src]")) {
+      if (!isApplicableVideoSource(video, source)) continue;
       const rawUrl = source.getAttribute("src") || source.src || "";
       const url = resolveUrl(rawUrl);
-      if (!url) continue;
+      if (!url || (directOnly && !isReplayableHoverVideoUrl(url))) continue;
 
       const score = Math.max(
-        extractQualityScore(source.getAttribute("data-quality")),
-        extractQualityScore(source.getAttribute("label")),
-        extractQualityScore(source.getAttribute("res")),
-        extractQualityScore(source.getAttribute("size")),
+        extractQualityScore(source.getAttribute("data-quality"), true),
+        extractQualityScore(source.getAttribute("label"), true),
+        extractQualityScore(source.getAttribute("res"), true),
+        extractQualityScore(source.getAttribute("size"), true),
         extractQualityScore(source.getAttribute("title")),
         extractQualityScore(url),
       );
@@ -3399,13 +3721,57 @@
       bestSourceScore = score;
     }
 
-    if (bestSourceUrl) {
-      if (currentIsBlobLike) return bestSourceUrl;
-      if (!current) return bestSourceUrl;
-      if (bestSourceScore > currentScore) return bestSourceUrl;
+    return bestSourceUrl
+      ? { url: bestSourceUrl, score: bestSourceScore }
+      : null;
+  }
+
+  function isApplicableVideoSource(video, source) {
+    const media = source.getAttribute("media") || "";
+    if (media) {
+      try {
+        if (!window.matchMedia(media).matches) return false;
+      } catch {
+        return false;
+      }
     }
 
-    return current;
+    const type = source.getAttribute("type") || "";
+    if (type) {
+      try {
+        if (!video.canPlayType(type)) return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function getVideoSourceIdentity(video) {
+    if (!(video instanceof HTMLVideoElement)) return "";
+
+    return JSON.stringify([
+      resolveUrl(video.currentSrc || ""),
+      resolveUrl(video.getAttribute("src") || video.src || ""),
+      Array.from(video.querySelectorAll("source[src]"), (source) => [
+        source.getAttribute("src") || source.src || "",
+        source.getAttribute("type") || "",
+        source.getAttribute("media") || "",
+      ]),
+    ]);
+  }
+
+  function resolveVideoFallbackUrl(candidate) {
+    if (candidate.fallbackUrl) return candidate.fallbackUrl;
+
+    const video = candidate.sourceElement;
+    if (
+      !(video instanceof HTMLVideoElement) ||
+      candidate.sourceIdentity !== getVideoSourceIdentity(video)
+    ) {
+      return "";
+    }
+    return pickVideoPreviewUrl(video);
   }
 
   function pickVideoPreviewUrl(video) {
@@ -3414,13 +3780,13 @@
     const posterUrl = pickVideoPosterUrl(video);
     if (posterUrl) return posterUrl;
 
-    if (VIDEO_PREVIEW_CACHE.has(video)) {
-      return VIDEO_PREVIEW_CACHE.get(video) || "";
-    }
+    const sourceIdentity = getVideoSourceIdentity(video);
+    const cached = VIDEO_PREVIEW_CACHE.get(video);
+    if (cached?.sourceIdentity === sourceIdentity) return cached.url;
 
     const frameUrl = captureVideoFrameUrl(video);
     if (frameUrl || video.readyState >= 2) {
-      VIDEO_PREVIEW_CACHE.set(video, frameUrl);
+      VIDEO_PREVIEW_CACHE.set(video, { sourceIdentity, url: frameUrl });
     }
     return frameUrl;
   }
@@ -3432,6 +3798,7 @@
 
   function captureVideoFrameUrl(video) {
     if (!(video instanceof HTMLVideoElement)) return "";
+    if (video.readyState < 2) return "";
 
     const sourceWidth = Math.round(video.videoWidth || video.clientWidth || 0);
     const sourceHeight = Math.round(
@@ -3462,11 +3829,13 @@
     }
   }
 
-  function extractQualityScore(value) {
+  function extractQualityScore(value, allowPlainNumber = false) {
     if (!value) return 0;
-    const match = String(value)
-      .toLowerCase()
-      .match(/(\d{3,4})\s*p?/);
+    const text = String(value).trim().toLowerCase();
+    if (allowPlainNumber && /^\d{3,4}$/.test(text)) return Number(text);
+    // URLs routinely contain years and IDs; only explicit resolution tokens
+    // such as /clip-1080p.mp4 carry a quality signal.
+    const match = text.match(/(?:^|[^a-z0-9])(\d{3,4})\s*p(?=$|[^a-z0-9])/);
     return match ? Number(match[1]) || 0 : 0;
   }
 
@@ -3572,14 +3941,7 @@
     if (isSvgUrl(url)) return true;
     if (url.startsWith("data:image/")) return true;
 
-    try {
-      const parsed = new URL(url, window.location.href);
-      return /\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)$/i.test(
-        parsed.pathname,
-      );
-    } catch {
-      return false;
-    }
+    return getMediaFormatFromUrl(url)?.type === "image";
   }
 
   function isSvgUrl(url, options = {}) {
@@ -3600,18 +3962,7 @@
   }
 
   function hasSvgQueryHint(parsed) {
-    for (const key of [
-      "content-type",
-      "content_type",
-      "ext",
-      "extension",
-      "file",
-      "filename",
-      "format",
-      "mime",
-      "name",
-      "type",
-    ]) {
+    for (const key of MEDIA_QUERY_KEYS) {
       const value = parsed.searchParams.get(key);
       if (isSvgHintValue(value)) return true;
     }
@@ -3620,23 +3971,11 @@
   }
 
   function isSvgHintValue(value) {
-    const normalized = String(value || "")
-      .trim()
-      .toLowerCase();
-    return (
-      normalized === "svg" ||
-      normalized === "image/svg+xml" ||
-      normalized.endsWith(".svg")
-    );
+    return getMediaFormatFromHint(value)?.extension === "svg";
   }
 
   function isSvgMimeType(value) {
-    return (
-      String(value || "")
-        .split(";", 1)[0]
-        .trim()
-        .toLowerCase() === "image/svg+xml"
-    );
+    return inferExtensionFromContentType(value) === "svg";
   }
 
   function isWikimediaFilePageUrl(url) {
@@ -3728,12 +4067,7 @@
     if (!url) return false;
     if (url.startsWith("data:video/")) return true;
 
-    try {
-      const parsed = new URL(url, window.location.href);
-      return /\.(m4v|mp4|mov|webm|ogv|m3u8)(?:$|\?)/i.test(parsed.pathname);
-    } catch {
-      return false;
-    }
+    return getMediaFormatFromUrl(url)?.type === "video";
   }
 
   function resolveUrl(url) {
