@@ -72,16 +72,16 @@ class HTMLImageElement extends Element {
 }
 
 class HTMLPictureElement extends Element {
-  constructor() {
-    super("picture");
+  constructor(attributes = {}) {
+    super("picture", attributes);
   }
 }
 
 class HTMLVideoElement extends Element {}
 
-function loadResolver(mediaMatches = {}) {
+function loadResolver(mediaMatches = {}, pageUrl = PAGE_URL) {
   const window = {
-    location: new URL(PAGE_URL),
+    location: new URL(pageUrl),
     matchMedia: (query) => ({ matches: mediaMatches[query] ?? true }),
   };
   window.top = window;
@@ -94,6 +94,7 @@ function loadResolver(mediaMatches = {}) {
     HTMLImageElement,
     HTMLPictureElement,
     HTMLVideoElement,
+    document: { elementsFromPoint: () => [] },
     localStorage: { getItem: () => null },
     getComputedStyle: () => ({
       display: "block",
@@ -108,7 +109,7 @@ function loadResolver(mediaMatches = {}) {
   vm.runInContext(
     source.replace(
       /^  init\(\);$/m,
-      "globalThis.resolver = { pickBestImageUrl, pickBestPictureSourceUrl, buildImageCandidate, findHoverCandidate };",
+      "globalThis.resolver = { pickBestImageUrl, pickBestPictureSourceUrl, buildImageCandidate, findHoverCandidate, findPopoutCandidate };",
     ),
     context,
     { filename },
@@ -124,6 +125,15 @@ function hoveredImage(image, api = resolver) {
     path.push(element);
   }
   return api.findHoverCandidate({ path, clientX: 80, clientY: 60 });
+}
+
+function assertHoverAndPopout(target, expectedUrl, api = resolver) {
+  assert.equal(hoveredImage(target, api)?.url, expectedUrl, "hover URL");
+  assert.equal(
+    api.findPopoutCandidate(target, 80, 60)?.url,
+    expectedUrl,
+    "popout URL",
+  );
 }
 
 for (const attr of [
@@ -293,5 +303,195 @@ test("a plain image remains usable with or without currentSrc", () => {
     assert.equal(candidate.url, absolute("image.jpg"));
     assert.equal(candidate.sourceElement, image);
     assert.equal(candidate.type, "image");
+  }
+});
+
+for (const tagName of ["div", "figure", "span", "picture", "a"]) {
+  test(`a single-image ${tagName} container supplies the full image`, () => {
+    const image = new HTMLImageElement(
+      { src: "thumb.jpg", srcset: "thumb.jpg 160w, thumb-2x.jpg 320w" },
+      "thumb.jpg",
+    );
+    const attributes = { "data-full-src": "original.jpg" };
+    const container = tagName === "picture"
+      ? new HTMLPictureElement(attributes)
+      : new Element(tagName, attributes);
+    container.append(image);
+    assertHoverAndPopout(image, absolute("original.jpg"));
+  });
+}
+
+for (const attr of [
+  "data-original", "data-full", "data-full-src", "data-hires", "data-zoom-src", "data-large",
+]) {
+  test(`container ${attr} is found through a nested image wrapper`, () => {
+    const image = new HTMLImageElement({ src: "thumb.jpg" }, "thumb.jpg");
+    const inner = new Element("span").append(image);
+    new Element("figure", { [attr]: "original.jpg" }).append(inner);
+    assertHoverAndPopout(image, absolute("original.jpg"));
+  });
+}
+
+test("an image's own full-image metadata takes priority over its container", () => {
+  const image = new HTMLImageElement(
+    { src: "thumb.jpg", "data-original": "image-original.jpg" },
+    "thumb.jpg",
+  );
+  new Element("figure", { "data-zoom-src": "container-original.jpg" }).append(image);
+  assertHoverAndPopout(image, absolute("image-original.jpg"));
+});
+
+test("a multi-image ancestor cannot assign one image's source to another", () => {
+  const first = new HTMLImageElement({ src: "first-thumb.jpg" }, "first-thumb.jpg");
+  const second = new HTMLImageElement({ src: "second-thumb.jpg" }, "second-thumb.jpg");
+  const firstContainer = new Element("figure", { "data-full": "first-original.jpg" }).append(first);
+  const secondContainer = new Element("figure").append(second);
+  new Element("div", { "data-original": "unrelated-gallery-original.jpg" })
+    .append(firstContainer, secondContainer);
+  assertHoverAndPopout(first, absolute("first-original.jpg"));
+  assertHoverAndPopout(second, absolute("second-thumb.jpg"));
+});
+
+test("container discovery stops at an unrelated structural ancestor", () => {
+  const image = new HTMLImageElement({ src: "thumb.jpg" }, "thumb.jpg");
+  new Element("div", { "data-full": "unrelated-original.jpg" })
+    .append(new Element("section").append(image));
+  assertHoverAndPopout(image, absolute("thumb.jpg"));
+});
+
+test("Wikipedia's separate thumbnail host resolves to the source image", () => {
+  const fileName = "Borealis_in_Welch_Township%2C_May_2024_%28cropped%29.jpg";
+  const thumbBase = `https://thumb.wikimedia.org/wikipedia/commons/thumb/a/aa/${fileName}/`;
+  const thumbnail = `${thumbBase}960px-${fileName}?utm_source=en.wikipedia.org&utm_content=thumbnail#preview`;
+  const image = new HTMLImageElement({
+    src: thumbnail,
+    srcset: `${thumbBase}500px-${fileName} 500w, ${thumbnail} 960w`,
+  }, thumbnail);
+  new Element("figure").append(
+    new Element("a", { href: `https://en.wikipedia.org/wiki/File:${fileName}` }).append(image),
+  );
+  assertHoverAndPopout(image, `https://upload.wikimedia.org/wikipedia/commons/a/aa/${fileName}`);
+});
+
+test("legacy Wikimedia thumbnail URLs still resolve to their original image", () => {
+  const thumbnail = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/aa/Photo.jpg/960px-Photo.jpg?width=960#preview";
+  const image = new HTMLImageElement({ src: thumbnail }, thumbnail);
+  assertHoverAndPopout(image, "https://upload.wikimedia.org/wikipedia/commons/a/aa/Photo.jpg");
+});
+
+test("a Wikimedia SVG raster thumbnail resolves to the original SVG", () => {
+  const thumbnail = "https://thumb.wikimedia.org/wikipedia/commons/thumb/6/66/Camera2_mgx.svg/960px-Camera2_mgx.svg.png";
+  const image = new HTMLImageElement({ src: thumbnail }, thumbnail);
+  assertHoverAndPopout(image, "https://upload.wikimedia.org/wikipedia/commons/6/66/Camera2_mgx.svg");
+  assert.equal(resolver.buildImageCandidate(image).kind, "svg");
+});
+
+for (const extension of ["apng", "tif", "tiff"]) {
+  test(`Wikimedia ${extension} thumbnails resolve to the Safari-supported original`, () => {
+    for (const host of ["thumb.wikimedia.org", "upload.wikimedia.org"]) {
+      const thumbnail = `https://${host}/wikipedia/commons/thumb/a/aa/Media.${extension}/960px-Media.${extension}.png`;
+      const image = new HTMLImageElement({ src: thumbnail }, thumbnail);
+      assertHoverAndPopout(image, `https://upload.wikimedia.org/wikipedia/commons/a/aa/Media.${extension}`);
+    }
+  });
+}
+
+for (const extension of ["pdf", "djvu", "webm"]) {
+  test(`Wikimedia ${extension} raster previews remain displayable images`, () => {
+    for (const host of ["thumb.wikimedia.org", "upload.wikimedia.org"]) {
+      const thumbnail = `https://${host}/wikipedia/commons/thumb/a/aa/Media.${extension}/960px-Media.${extension}.jpg`;
+      const image = new HTMLImageElement({ src: thumbnail }, thumbnail);
+      assertHoverAndPopout(image, thumbnail);
+    }
+  });
+}
+
+test("Wikimedia originals and unrelated thumbnail hosts remain unchanged", () => {
+  for (const url of [
+    "https://upload.wikimedia.org/wikipedia/commons/a/aa/Photo.jpg",
+    "https://example.test/wikipedia/commons/thumb/a/aa/Photo.jpg/960px-Photo.jpg",
+    "https://thumb.wikimedia.org.example.test/wikipedia/commons/thumb/a/aa/Photo.jpg/960px-Photo.jpg",
+  ]) {
+    const image = new HTMLImageElement({ src: url }, url);
+    assertHoverAndPopout(image, url);
+  }
+});
+
+function googleResultImage(href) {
+  const thumbnail = "https://encrypted-tbn0.gstatic.com/images?q=tbn:thumbnail";
+  const image = new HTMLImageElement({ src: thumbnail }, thumbnail);
+  new Element("a", { href }).append(image);
+  return image;
+}
+
+function googleImageResultUrl(original, origin = "https://www.google.com") {
+  return `${origin}/imgres?imgurl=${encodeURIComponent(original)}&imgrefurl=https%3A%2F%2Fexample.test%2Farticle`;
+}
+
+test("Google Images opens the declared source instead of the cached thumbnail", () => {
+  const original = "https://images.example.test/photo.jpg";
+  const image = googleResultImage(googleImageResultUrl(original));
+  assertHoverAndPopout(image, original);
+});
+
+test("Google image wrappers preserve encoded filenames and source query strings", () => {
+  const original = "https://images.example.test/Photo%20%26%20Map.jpg?token=a%2Fb%2Bc&name=one+two&width=4096";
+  const image = googleResultImage(googleImageResultUrl(original));
+  assertHoverAndPopout(image, original);
+});
+
+test("Google image sources can use extensionless HTTP URLs", () => {
+  for (const original of ["https://images.example.test/asset/123?quality=original", "http://images.example.test/asset/123"]) {
+    assertHoverAndPopout(googleResultImage(googleImageResultUrl(original)), original);
+  }
+});
+
+test("relative Google Images links resolve against the Google results page", () => {
+  const api = loadResolver({}, "https://www.google.com/search?q=photos&udm=2");
+  const original = "https://images.example.test/photo.jpg";
+  const image = googleResultImage(`/imgres?imgurl=${encodeURIComponent(original)}`);
+  assertHoverAndPopout(image, original, api);
+});
+
+test("regional Google Images result links resolve the original image", () => {
+  const original = "https://images.example.test/photo.jpg";
+  for (const origin of ["https://www.google.co.uk", "https://www.google.com.au", "https://www.google.de", "https://www.google.cat"]) {
+    assertHoverAndPopout(googleResultImage(googleImageResultUrl(original, origin)), original);
+  }
+});
+
+test("a Google result container hit resolves its nested image source", () => {
+  const original = "https://images.example.test/photo.jpg";
+  const image = googleResultImage(googleImageResultUrl(original));
+  assertHoverAndPopout(image.parentElement, original);
+});
+
+test("Google-like hosts and unrelated routes cannot unwrap an imgurl parameter", () => {
+  const original = "https://images.example.test/photo.jpg";
+  for (const href of [
+    googleImageResultUrl(original, "https://notgoogle.com"),
+    googleImageResultUrl(original, "https://www.google.com.example.test"),
+    googleImageResultUrl(original, "https://example.test"),
+    `https://www.google.com/search?imgurl=${encodeURIComponent(original)}`,
+  ]) {
+    const image = googleResultImage(href);
+    assertHoverAndPopout(image, image.currentSrc);
+  }
+});
+
+test("Google wrappers with unsafe or malformed source URLs retain the thumbnail", () => {
+  for (const original of [
+    "javascript:alert(1)", "data:image/png;base64,AAAA", "file:///tmp/photo.jpg",
+    "blob:https://example.test/123", "/photo.jpg", "https://",
+  ]) {
+    const image = googleResultImage(googleImageResultUrl(original));
+    assertHoverAndPopout(image, image.currentSrc);
+  }
+});
+
+test("Google wrappers without an image source retain the thumbnail", () => {
+  for (const href of ["https://www.google.com/imgres", "https://www.google.com/imgres?imgurl=&imgrefurl=https%3A%2F%2Fexample.test%2Farticle"]) {
+    const image = googleResultImage(href);
+    assertHoverAndPopout(image, image.currentSrc);
   }
 });
