@@ -46,17 +46,22 @@ elements at the same screen coordinates for:
 - `<img>` elements, preferring explicit full-image attributes (`data-zoom-src`,
   `data-full-src`, `data-full`, `data-hires`, `data-large`, and `data-original`)
   over thumbnail display sources, then the largest applicable `srcset` candidate.
+  Full-image attributes on a nearby single-image container are also supported;
+  metadata on a shared gallery container is not applied to unrelated images.
 - The browser-selected `<picture>` source, or the image's own `srcset` when
   the browser uses its fallback image.
 - `currentSrc`, `src`, and common lazy-load attributes: `data-src`, `data-url`,
   and `data-lazy-src`.
 - Direct image links around an image or under the pointer.
+- Google Images result links, using the original image URL in `imgurl` rather
+  than Google's cached thumbnail or the source website's article URL.
 - CSS `background-image` URLs on common container elements.
 - `<video>` elements, including `currentSrc`, `src`, and nested `<source>` URLs.
 - Direct video links for popouts and hover previews.
 - Wikipedia/Wikimedia thumbnails, media-viewer file hashes, and direct upload
-  URLs, including thumbnail URLs rewritten back to the original upload path when
-  possible.
+  URLs, including thumbnails on `thumb.wikimedia.org` and `upload.wikimedia.org`
+  rewritten to the original upload image. Raster previews are retained for
+  documents and other formats that cannot be displayed as ordinary images.
 - Instagram images and videos when the page exposes them as ordinary media
   elements, background images, or direct media links.
 - OnlyFans images, videos, and background images nested inside post media
@@ -162,8 +167,9 @@ The syntax and regression checks run automatically for pushes to `main` and
 `beta`, and for pull requests.
 
 The tests exercise the actual userscript functions with simulated page elements.
-They cover full-image attributes, responsive image and picture source selection,
-direct image links, and ordinary image and lazy-load fallbacks.
+They cover full-image attributes on images and their containers, Google Images
+result links, Wikimedia thumbnails, responsive image and picture source
+selection, direct image links, and ordinary image and lazy-load fallbacks.
 
 Real Safari/Tampermonkey checks remain necessary for playback, live-video
 restoration, dynamic site behavior, and actual saved downloads.

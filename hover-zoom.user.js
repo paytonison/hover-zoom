@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         hover-zoom-safari
 // @namespace    https://github.com/paytonison/hover-zoom
-// @version      3.0.0
+// @version      3.0.1
 // @description  Hover images or videos, including nested site media, for a near-cursor preview. P pins, Z toggles, Esc hides, and Alt/Option-click opens a movable overlay.
 // @contributionURL https://ko-fi.com/paytonison
 // @match        http://*/*
@@ -3589,10 +3589,8 @@
   function pickBestImageUrl(image) {
     // The rendered image and its srcset may both be thumbnail variants.
     // Prefer an explicitly associated full image before display sources.
-    for (const attr of FULL_IMAGE_ATTRS) {
-      const value = image.getAttribute(attr)?.trim();
-      if (value) return resolveUrl(value);
-    }
+    const declaredUrl = pickDeclaredFullImageUrl(image);
+    if (declaredUrl) return declaredUrl;
 
     const pictureSrcsetUrl = pickBestPictureSourceUrl(image);
     if (pictureSrcsetUrl) return pictureSrcsetUrl;
@@ -3617,6 +3615,25 @@
     }
 
     return resolveUrl(image.src || "");
+  }
+
+  function pickDeclaredFullImageUrl(image) {
+    // Some galleries put the source on a wrapper instead of the thumbnail.
+    // Only inherit from a nearby container belonging to this one image.
+    let element = image;
+    for (let depth = 0; element && depth <= 8; depth++) {
+      if (element !== image) {
+        if (!element.matches?.("a, figure, picture, span, div")) break;
+        const images = element.querySelectorAll("img");
+        if (images.length !== 1 || images[0] !== image) break;
+      }
+      for (const attr of FULL_IMAGE_ATTRS) {
+        const value = element.getAttribute(attr)?.trim();
+        if (value) return resolveUrl(value);
+      }
+      element = element.parentElement;
+    }
+    return "";
   }
 
   function pickBestPictureSourceUrl(image) {
@@ -3918,6 +3935,9 @@
   function pickLinkedImageUrl(url, fallbackUrl = "", link = null) {
     if (!url) return "";
 
+    const googleImageUrl = pickGoogleImageResultUrl(url);
+    if (googleImageUrl) return googleImageUrl;
+
     const mediaViewerUrl = pickWikimediaMediaViewerAssetUrl(url, "image");
     if (mediaViewerUrl) {
       return fallbackUrl || mediaViewerUrl;
@@ -3934,6 +3954,33 @@
     }
 
     return resolvedUrl;
+  }
+
+  function pickGoogleImageResultUrl(url) {
+    if (!url) return "";
+
+    try {
+      const parsed = new URL(url, window.location.href);
+      if (!/^https?:$/.test(parsed.protocol)) return "";
+      if (parsed.pathname !== "/imgres") return "";
+      if (
+        !/(^|\.)google\.(?:com|cat|[a-z]{2}|(?:co|com)\.[a-z]{2})$/i.test(
+          parsed.hostname,
+        )
+      ) {
+        return "";
+      }
+
+      // URLSearchParams decodes the wrapper once. A second decode would
+      // change escaped characters in the original image's filename or query.
+      const imageUrl = parsed.searchParams.get("imgurl") || "";
+      if (!/^https?:\/\//i.test(imageUrl)) return "";
+      const source = new URL(imageUrl);
+      if (!/^https?:$/.test(source.protocol)) return "";
+      return resolveUrl(source.href);
+    } catch {
+      return "";
+    }
   }
 
   function isLikelyImageUrl(url) {
@@ -4096,11 +4143,13 @@
       const host = parsed.hostname.toLowerCase();
 
       if (
-        host === "upload.wikimedia.org" &&
+        (host === "upload.wikimedia.org" || host === "thumb.wikimedia.org") &&
         parsed.pathname.includes("/thumb/")
       ) {
         const originalPath = getWikimediaOriginalPath(parsed.pathname);
         if (originalPath) {
+          // Thumbnails may use a separate host; originals live on upload.
+          parsed.hostname = "upload.wikimedia.org";
           parsed.pathname = originalPath;
           parsed.search = "";
           parsed.hash = "";
@@ -4126,6 +4175,12 @@
     const segments = pathname.split("/").filter(Boolean);
     const thumbIndex = segments.indexOf("thumb");
     if (thumbIndex === -1 || segments.length <= thumbIndex + 2) return "";
+
+    // Documents and video posters need their raster rendition to stay usable
+    // in an image element. Only upgrade browser-renderable image originals.
+    const fileName = safeDecodeURIComponent(segments[segments.length - 2]);
+    if (!/\.(?:apng|avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)$/i.test(fileName))
+      return "";
 
     return `/${segments
       .filter(
